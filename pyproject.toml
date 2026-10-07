@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Muhammad Idnan" }]
 keywords = ["llm", "model-routing", "llm-router", "llm-evaluation", "cost-optimization"]
 classifiers = [
     "Development Status :: 3 - Alpha",
