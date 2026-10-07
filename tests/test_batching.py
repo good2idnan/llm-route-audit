@@ -302,3 +302,42 @@ def test_bad_key_in_batch_mode_gives_a_clear_message(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "Batch mode stopped: OpenRouter: API key expired." in result.output
     assert "Traceback" not in result.output
+
+
+def test_batch_mode_never_falls_back_to_full_price(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from llm_route_audit.cli import app
+
+    class NoBatchEndpoint(FakeBatches):
+        def submit(self, candidate, items):
+            raise ProviderError("Model does not have a :batch endpoint.", disable=True)
+
+    monkeypatch.setattr("llm_route_audit.cli.batch_client_for", lambda provider: NoBatchEndpoint())
+    monkeypatch.setattr(
+        "llm_route_audit.cli.get_provider", lambda name: pytest.fail("no live calls")
+    )
+    sample = Path(__file__).resolve().parent.parent / "examples" / "sample_logs.jsonl"
+    candidates = tmp_path / "c.yaml"
+    candidates.write_text("candidates:\n  - model: claude-haiku-4-5\n", "utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "replay",
+            str(sample),
+            "-c",
+            str(candidates),
+            "--sample",
+            "3",
+            "--batch",
+            "--yes",
+            "--cache",
+            str(tmp_path / "cache.sqlite"),
+            "--out",
+            str(tmp_path / "r.jsonl"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "nothing was sent for them at full price" in result.output

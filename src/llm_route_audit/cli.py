@@ -267,7 +267,16 @@ def _collect_batches(
             f"{INDENT}{progress.live} requests use a provider without a batch API; they run now."
         )
     for reason, n in progress.failed.most_common(3):
-        typer.echo(f"{INDENT}{n} x {reason} (these will run live)")
+        typer.echo(f"{INDENT}{n} x {reason}")
+    if progress.failed:
+        # Asked for batch prices: never quietly pay full price instead.
+        typer.echo(
+            "Some requests could not use the batch API, so nothing was sent for them at full "
+            "price. Run the same command without --batch to send them normally, or pick a model "
+            "that supports batches. Answers already collected are saved.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     if progress.pending:
         typer.echo(
             "Answers are still being prepared. Run the same command again later to collect "

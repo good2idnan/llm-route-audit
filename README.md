@@ -174,7 +174,7 @@ Three spending controls work on both `replay` and `grade`:
 - **`--budget 1.00`** refuses to start if the *estimate* is above $1.00.
 - **`--max-spend 1.00`** is a hard limit on *actual* spend. Each call reserves its worst-case cost first, so even parallel calls can't push the total over. Calls that don't fit are held back and reported.
 
-**Half-price batches.** Add `--batch` to `replay` or `grade` to use the batch APIs of Anthropic and OpenRouter. They cost about half the normal price and answer within 24 hours, usually much sooner. llm-route-audit sends what the run still needs, waits up to `--wait-minutes 60`, and saves the answers. If some are still in progress when the wait ends, run the same command again later to collect them; nothing is sent or paid for twice.
+**Half-price batches.** Add `--batch` to `replay` or `grade` to use the batch APIs of Anthropic and OpenRouter. They cost about half the normal price and answer within 24 hours, usually much sooner. llm-route-audit sends what the run still needs, waits up to `--wait-minutes 60`, and saves the answers. If some are still in progress when the wait ends, run the same command again later to collect them; nothing is sent or paid for twice. Not every model accepts batches. If one doesn't, llm-route-audit stops and says so instead of quietly paying full price.
 
 ## Logs
 
