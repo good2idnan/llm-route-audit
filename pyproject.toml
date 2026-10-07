@@ -1,6 +1,6 @@
 [project]
 name = "llm-route-audit"
-version = "0.1.2"
+version = "0.1.3"
 description = "Find out whether LLM model routing saves money without hurting quality, on your own traffic."
 readme = "README.md"
 requires-python = ">=3.11"

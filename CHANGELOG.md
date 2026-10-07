@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 (2026-10-07)
 
 - `llm-route-audit redact`: hide private data in a copy of your logs, offline. Covers emails, phones, checksum-verified cards, IBANs, SSN and UK NI numbers, IPs, links with tokens, API keys and passwords, and dates of birth, plus your own patterns. Placeholders stay consistent between the request and the original answer.
 - Batch mode stops with a clear message instead of paying full price when a model doesn't accept batches.
