@@ -2,14 +2,14 @@ from datetime import date
 
 import pytest
 
-from routeaudit.analyze import (
+from llm_route_audit.analyze import (
     UNLABELLED,
     build_profile,
     estimate_tokens,
     percentile,
 )
-from routeaudit.costs import ModelPrice, PriceTable
-from routeaudit.records import LogRecord
+from llm_route_audit.costs import ModelPrice, PriceTable
+from llm_route_audit.records import LogRecord
 
 PRICES = PriceTable(
     updated=date(2026, 9, 25),

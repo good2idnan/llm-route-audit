@@ -3,12 +3,12 @@ from datetime import date
 
 import pytest
 
-from routeaudit.cache import ResultCache
-from routeaudit.costs import ModelPrice, PriceTable
-from routeaudit.grading.grade import ORIGINAL, GradingConfig, plan_grades, run_judges
-from routeaudit.providers.base import Completion
-from routeaudit.records import LogRecord
-from routeaudit.replay import ReplayResult
+from llm_route_audit.cache import ResultCache
+from llm_route_audit.costs import ModelPrice, PriceTable
+from llm_route_audit.grading.grade import ORIGINAL, GradingConfig, plan_grades, run_judges
+from llm_route_audit.providers.base import Completion
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import ReplayResult
 
 PRICES = PriceTable(
     updated=date(2026, 9, 25), models={"claude-judge": ModelPrice(input=1, output=5)}

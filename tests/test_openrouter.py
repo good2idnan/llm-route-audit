@@ -6,10 +6,10 @@ import urllib.error
 
 import pytest
 
-from routeaudit.candidates import Candidate
-from routeaudit.providers import openrouter
-from routeaudit.providers.base import ProviderError
-from routeaudit.records import Message
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.providers import openrouter
+from llm_route_audit.providers.base import ProviderError
+from llm_route_audit.records import Message
 
 MESSAGES = [Message(role="system", content="Be brief."), Message(role="user", content="Hi")]
 HAIKU = Candidate(model="openrouter/anthropic/claude-haiku-4.5", max_tokens=500)

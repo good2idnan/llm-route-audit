@@ -3,10 +3,10 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from routeaudit.cli import app
-from routeaudit.ingest.jsonl import load_jsonl
-from routeaudit.ingest.litellm import Skip, convert, import_litellm
-from routeaudit.report import litellm_model
+from llm_route_audit.cli import app
+from llm_route_audit.ingest.jsonl import load_jsonl
+from llm_route_audit.ingest.litellm import Skip, convert, import_litellm
+from llm_route_audit.report import litellm_model
 
 
 def payload(**overrides):

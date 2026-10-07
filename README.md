@@ -19,7 +19,7 @@ Model routers send easy prompts to cheap models and hard prompts to strong ones.
 pip install llm-route-audit
 ```
 
-Requires Python 3.11+. The command-line tool is called `routeaudit`; run `routeaudit --help` to see every command.
+Requires Python 3.11+. The command-line tool is called `llm-route-audit`; run `llm-route-audit --help` to see every command.
 
 ## Try it in one minute
 
@@ -29,7 +29,7 @@ No API key needed. The repository includes the results of a real run.
 git clone https://github.com/good2idnan/llm-route-audit.git
 cd llm-route-audit
 uv sync
-uv run routeaudit report examples/sample_logs.jsonl \
+uv run llm-route-audit report examples/sample_logs.jsonl \
   --replay examples/demo/replay.jsonl --grades examples/demo/grades.jsonl --min-samples 1
 ```
 
@@ -61,15 +61,15 @@ your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ repo
 
 | Command | What it does |
 |---|---|
-| `routeaudit import` | Convert LiteLLM, Langfuse or OpenTelemetry logs into routeaudit's log format |
-| `routeaudit validate` | Check a log file |
-| `routeaudit analyze` | Show what your traffic costs today, by task type and model |
-| `routeaudit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenRouter, Ollama) |
-| `routeaudit grade` | Compare every answer with the original: exact checks, then an AI judge |
-| `routeaudit report` | Recommend a model per task type, with cost and quality for each strategy |
-| `routeaudit export` | Write the policy as YAML or as a LiteLLM proxy config |
-| `routeaudit monitor` | After you switch, check that routed traffic still meets the audited quality |
-| `routeaudit check-model` | Test a newly released model on your last audit's sample and see what it would change |
+| `llm-route-audit import` | Convert LiteLLM, Langfuse or OpenTelemetry logs into llm-route-audit's log format |
+| `llm-route-audit validate` | Check a log file |
+| `llm-route-audit analyze` | Show what your traffic costs today, by task type and model |
+| `llm-route-audit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenRouter, Ollama) |
+| `llm-route-audit grade` | Compare every answer with the original: exact checks, then an AI judge |
+| `llm-route-audit report` | Recommend a model per task type, with cost and quality for each strategy |
+| `llm-route-audit export` | Write the policy as YAML or as a LiteLLM proxy config |
+| `llm-route-audit monitor` | After you switch, check that routed traffic still meets the audited quality |
+| `llm-route-audit check-model` | Test a newly released model on your last audit's sample and see what it would change |
 
 ## Audit your own traffic
 
@@ -78,7 +78,7 @@ The commands below use the bundled synthetic sample, [`examples/sample_logs.json
 **1. See what you spend today**
 
 ```bash
-uv run routeaudit analyze examples/sample_logs.jsonl
+uv run llm-route-audit analyze examples/sample_logs.jsonl
 ```
 
 ```
@@ -94,14 +94,14 @@ By task type (most expensive first)
 List the candidates in a YAML file (see [`examples/candidates.yaml`](examples/candidates.yaml)), check the cost first, then run:
 
 ```bash
-uv run routeaudit replay examples/sample_logs.jsonl -c examples/candidates.yaml --dry-run
-uv run routeaudit replay examples/sample_logs.jsonl -c examples/candidates.yaml --max-spend 1.00
+uv run llm-route-audit replay examples/sample_logs.jsonl -c examples/candidates.yaml --dry-run
+uv run llm-route-audit replay examples/sample_logs.jsonl -c examples/candidates.yaml --max-spend 1.00
 ```
 
 **3. Grade the answers**
 
 ```bash
-uv run routeaudit grade examples/sample_logs.jsonl --config examples/grading.yaml --max-spend 1.00
+uv run llm-route-audit grade examples/sample_logs.jsonl --config examples/grading.yaml --max-spend 1.00
 ```
 
 Rules are set per task type in [`examples/grading.yaml`](examples/grading.yaml). Exact checks run first and cost nothing. Answers that pass them go to the AI judge, which compares each one with the original twice, swapping the order to cancel position bias. Disagreements count as ties. Pick the judge with `--judge-model`.
@@ -109,16 +109,16 @@ Rules are set per task type in [`examples/grading.yaml`](examples/grading.yaml).
 **4. Get the report**
 
 ```bash
-uv run routeaudit report examples/sample_logs.jsonl
+uv run llm-route-audit report examples/sample_logs.jsonl
 ```
 
-For each task type, the report recommends the **cheapest option that keeps at least 95% of the original's pass rate**, and only once that option has **at least 10 graded answers**. Until then it keeps your current model and says why. The same report is saved as `.routeaudit/report.html`. Tune the rules with `--target` and `--min-samples`.
+For each task type, the report recommends the **cheapest option that keeps at least 95% of the original's pass rate**, and only once that option has **at least 10 graded answers**. Until then it keeps your current model and says why. The same report is saved as `.llm-route-audit/report.html`. Tune the rules with `--target` and `--min-samples`.
 
 **5. Export the policy**
 
 ```bash
-uv run routeaudit export examples/sample_logs.jsonl --out routing-policy.yaml
-uv run routeaudit export examples/sample_logs.jsonl --format litellm --out litellm-config.yaml
+uv run llm-route-audit export examples/sample_logs.jsonl --out routing-policy.yaml
+uv run llm-route-audit export examples/sample_logs.jsonl --format litellm --out litellm-config.yaml
 ```
 
 The LiteLLM config gives each task type its own model alias, such as `route/draft_reply`. Your app sends each request to its task's alias, and LiteLLM forwards it to the chosen model with the right effort setting.
@@ -128,7 +128,7 @@ The LiteLLM config gives each task type its own model alias, such as `route/draf
 Models change and traffic drifts, so a cheaper route that passed the audit can get worse later. Once the policy is live, point `monitor` at fresh production logs:
 
 ```bash
-uv run routeaudit monitor production-logs.jsonl --policy routing-policy.yaml --config examples/grading.yaml
+uv run llm-route-audit monitor production-logs.jsonl --policy routing-policy.yaml --config examples/grading.yaml
 ```
 
 For each task that switched to a cheaper model, it samples recent requests (`--per-task 20`) and replays them on the model the route replaced. It then grades the production answer against that reference answer and compares the pass rate with what the audit measured:
@@ -147,7 +147,7 @@ Monitoring uses the same cost estimate, confirmation, `--max-spend` and cache as
 When a new model comes out, test it on the same requests as your last audit:
 
 ```bash
-uv run routeaudit check-model examples/sample_logs.jsonl -m claude-sonnet-5-5 --effort low --config examples/grading.yaml
+uv run llm-route-audit check-model examples/sample_logs.jsonl -m claude-sonnet-5-5 --effort low --config examples/grading.yaml
 ```
 
 It replays and grades only the new model, adds its results to your audit files, and shows which tasks it would take over and how projected savings change. To test the "one strong model at lower effort" alternative, check your current model at `--effort low`.
@@ -166,7 +166,7 @@ Effort levels (`low` to `max`) go next to the model in the candidates file. Open
 
 Three spending controls work on both `replay` and `grade`:
 
-- **Confirmation.** routeaudit shows the estimate and asks before spending (`--yes` skips the question).
+- **Confirmation.** llm-route-audit shows the estimate and asks before spending (`--yes` skips the question).
 - **`--budget 1.00`** refuses to start if the *estimate* is above $1.00.
 - **`--max-spend 1.00`** is a hard limit on *actual* spend. Each call reserves its worst-case cost first, so even parallel calls can't push the total over. Calls that don't fit are held back and reported.
 
@@ -176,9 +176,9 @@ Three spending controls work on both `replay` and `grade`:
 
 | Source | Command | Task type comes from |
 |---|---|---|
-| [LiteLLM](https://github.com/BerriAI/litellm) logging callbacks (JSON/JSONL) | `routeaudit import litellm-logs/ --format litellm` | request tag `task:<name>` |
-| [Langfuse](https://langfuse.com) observations (UI export or `/api/public/v2/observations`) | `routeaudit import observations.json --format langfuse` | trace tag `task:<name>`, or `--task-from-name` |
-| [OpenTelemetry](https://opentelemetry.io) GenAI spans (OTLP JSON, e.g. the Collector's file exporter) | `routeaudit import traces.jsonl --format otel` | span attribute `task_type` (`--task-attribute`) |
+| [LiteLLM](https://github.com/BerriAI/litellm) logging callbacks (JSON/JSONL) | `llm-route-audit import litellm-logs/ --format litellm` | request tag `task:<name>` |
+| [Langfuse](https://langfuse.com) observations (UI export or `/api/public/v2/observations`) | `llm-route-audit import observations.json --format langfuse` | trace tag `task:<name>`, or `--task-from-name` |
+| [OpenTelemetry](https://opentelemetry.io) GenAI spans (OTLP JSON, e.g. the Collector's file exporter) | `llm-route-audit import traces.jsonl --format otel` | span attribute `task_type` (`--task-attribute`) |
 
 Only real model calls are imported. Requests that can't be replayed faithfully yet are skipped and counted: failed calls, cache hits, images and tool calls. For OpenTelemetry, turn on GenAI message capture so the spans include the prompts and answers. API keys and other metadata are not copied.
 
@@ -215,7 +215,7 @@ Mostly the replay and judge calls. The demo in this repo (5 requests, 2 candidat
 Only the requests you choose to replay, sent to the providers you configure. Logs, answers, grades and reports stay in your project folder, and the HTML report loads nothing from the internet.
 
 **Can I trust an AI judge?**
-Treat it as one signal. Exact checks come first and settle formats and facts for free. The judge sees each pair in both orders, and the report shows how often its two verdicts agree. Use a strong judge model, and spot-check `.routeaudit/grades.jsonl`.
+Treat it as one signal. Exact checks come first and settle formats and facts for free. The judge sees each pair in both orders, and the report shows how often its two verdicts agree. Use a strong judge model, and spot-check `.llm-route-audit/grades.jsonl`.
 
 **How many requests do I need?**
 At least 10 graded answers per task type before anything is recommended, and 30 or more for confident numbers. The report shows a 95% range for every pass rate.

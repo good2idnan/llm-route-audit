@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from routeaudit.candidates import Candidate, CandidateFile, load_candidates
+from llm_route_audit.candidates import Candidate, CandidateFile, load_candidates
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "candidates.yaml"
 

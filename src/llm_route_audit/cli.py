@@ -1,4 +1,4 @@
-"""Command-line entry point: `routeaudit ...`."""
+"""Command-line entry point: `llm-route-audit ...`."""
 
 import json
 from collections import Counter
@@ -12,11 +12,11 @@ import yaml
 from dotenv import find_dotenv, load_dotenv
 from pydantic import ValidationError
 
-from routeaudit import __version__
-from routeaudit.analyze import UNLABELLED, build_profile
-from routeaudit.cache import ResultCache
-from routeaudit.candidates import Candidate, Effort, load_candidates
-from routeaudit.checkmodel import (
+from llm_route_audit import __version__
+from llm_route_audit.analyze import UNLABELLED, build_profile
+from llm_route_audit.cache import ResultCache
+from llm_route_audit.candidates import Candidate, Effort, load_candidates
+from llm_route_audit.checkmodel import (
     compare,
     merge_grades,
     merge_results,
@@ -24,8 +24,8 @@ from routeaudit.checkmodel import (
     sample_records,
     write_grade_dicts,
 )
-from routeaudit.costs import PriceTable, load_prices
-from routeaudit.display import (
+from llm_route_audit.costs import PriceTable, load_prices
+from llm_route_audit.display import (
     INDENT,
     render_estimate,
     render_grade_plan,
@@ -34,19 +34,19 @@ from routeaudit.display import (
     render_replay,
     usd,
 )
-from routeaudit.grading.grade import (
+from llm_route_audit.grading.grade import (
     judge_upper_bound,
     load_config,
     plan_grades,
     run_judges,
     write_grades,
 )
-from routeaudit.ingest.common import DEFAULT_TASK_TAG_PREFIX, write_records
-from routeaudit.ingest.jsonl import LoadResult, load_jsonl
-from routeaudit.ingest.langfuse import import_langfuse
-from routeaudit.ingest.litellm import import_litellm
-from routeaudit.ingest.otel import DEFAULT_TASK_ATTRIBUTE, import_otel
-from routeaudit.monitor import (
+from llm_route_audit.ingest.common import DEFAULT_TASK_TAG_PREFIX, write_records
+from llm_route_audit.ingest.jsonl import LoadResult, load_jsonl
+from llm_route_audit.ingest.langfuse import import_langfuse
+from llm_route_audit.ingest.litellm import import_litellm
+from llm_route_audit.ingest.otel import DEFAULT_TASK_ATTRIBUTE, import_otel
+from llm_route_audit.monitor import (
     DEFAULT_MIN_CHECKS,
     DEFAULT_PER_TASK,
     DEFAULT_TOLERANCE,
@@ -55,11 +55,11 @@ from routeaudit.monitor import (
     plan_monitor,
     render_monitor,
 )
-from routeaudit.policy import load_policy
-from routeaudit.providers import get_provider
-from routeaudit.providers.openrouter import fetch_prices as fetch_openrouter_prices
-from routeaudit.records import LogRecord
-from routeaudit.replay import (
+from llm_route_audit.policy import load_policy
+from llm_route_audit.providers import get_provider
+from llm_route_audit.providers.openrouter import fetch_prices as fetch_openrouter_prices
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import (
     completion_cost,
     estimate,
     load_results,
@@ -68,7 +68,7 @@ from routeaudit.replay import (
     worst_case_cost,
     write_results,
 )
-from routeaudit.report import (
+from llm_route_audit.report import (
     DEFAULT_MIN_SAMPLES,
     DEFAULT_TARGET,
     Report,
@@ -77,9 +77,9 @@ from routeaudit.report import (
     policy_litellm,
     policy_yaml,
 )
-from routeaudit.report_view import render_html, render_text
-from routeaudit.runner import execute
-from routeaudit.sampling import stratified_sample
+from llm_route_audit.report_view import render_html, render_text
+from llm_route_audit.runner import execute
+from llm_route_audit.sampling import stratified_sample
 
 app = typer.Typer(
     help="Find out whether LLM model routing saves money without hurting quality, "
@@ -89,7 +89,7 @@ app = typer.Typer(
 )
 
 MAX_ERRORS_SHOWN = 20
-WORK_DIR = Path(".routeaudit")
+WORK_DIR = Path(".llm-route-audit")
 
 LogsArg = Annotated[
     Path,
@@ -123,7 +123,7 @@ def _load_records(path: Path) -> list[LogRecord]:
         typer.echo(f"... and {len(result.errors) - MAX_ERRORS_SHOWN} more errors", err=True)
     if not result.ok:
         typer.echo(
-            f"{len(result.errors)} invalid lines. Fix them first (see `routeaudit validate`).",
+            f"{len(result.errors)} invalid lines. Fix them first (see `llm-route-audit validate`).",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -192,7 +192,7 @@ def _progress(noun: str) -> Callable[[int, int], None]:
 
 def _version(value: bool) -> None:
     if value:
-        typer.echo(f"routeaudit {__version__}")
+        typer.echo(f"llm-route-audit {__version__}")
         raise typer.Exit()
 
 
@@ -211,7 +211,7 @@ def main(
 
 @app.command()
 def validate(path: LogsArg) -> None:
-    """Check that a log file matches the routeaudit log format."""
+    """Check that a log file matches the llm-route-audit log format."""
     result = load_jsonl(path)
     for err in result.errors[:MAX_ERRORS_SHOWN]:
         typer.echo(f"line {err.line}: {err.message}", err=True)
@@ -329,7 +329,7 @@ def replay(
 def grade(
     path: LogsArg,
     replay_path: Annotated[
-        Path, typer.Option("--replay", help="Answers saved by `routeaudit replay`.")
+        Path, typer.Option("--replay", help="Answers saved by `llm-route-audit replay`.")
     ] = WORK_DIR / "replay.jsonl",
     config: Annotated[
         Path | None,
@@ -371,7 +371,9 @@ def grade(
     """Grade replayed answers against the originals: exact checks first, then an AI judge."""
     records = _load_records(path)
     if not replay_path.exists():
-        typer.echo(f"No replay answers at {replay_path}. Run `routeaudit replay` first.", err=True)
+        typer.echo(
+            f"No replay answers at {replay_path}. Run `llm-route-audit replay` first.", err=True
+        )
         raise typer.Exit(code=1)
     results = load_results(replay_path)
     try:
@@ -423,8 +425,12 @@ class ExportFormat(StrEnum):
     litellm = "litellm"
 
 
-ReplayOpt = Annotated[Path, typer.Option("--replay", help="Answers saved by `routeaudit replay`.")]
-GradesOpt = Annotated[Path, typer.Option("--grades", help="Grades saved by `routeaudit grade`.")]
+ReplayOpt = Annotated[
+    Path, typer.Option("--replay", help="Answers saved by `llm-route-audit replay`.")
+]
+GradesOpt = Annotated[
+    Path, typer.Option("--grades", help="Grades saved by `llm-route-audit grade`.")
+]
 TargetOpt = Annotated[
     float,
     typer.Option(
@@ -447,7 +453,9 @@ def _build_report(
     records = _load_records(path)
     for file, step in ((replay_path, "replay"), (grades_path, "grade")):
         if not file.exists():
-            typer.echo(f"No {step} results at {file}. Run `routeaudit {step}` first.", err=True)
+            typer.echo(
+                f"No {step} results at {file}. Run `llm-route-audit {step}` first.", err=True
+            )
             raise typer.Exit(code=1)
     return build_report(
         records,
@@ -499,7 +507,7 @@ def export(
         ExportFormat,
         typer.Option(
             "--format",
-            help="yaml: routeaudit's routing table. litellm: a LiteLLM proxy config with one "
+            help="yaml: llm-route-audit's routing table. litellm: a LiteLLM proxy config with one "
             "model alias per task type.",
         ),
     ] = ExportFormat.yaml,
@@ -543,7 +551,7 @@ def import_logs(
         ),
     ] = ImportFormat.litellm,
     out: Annotated[
-        Path, typer.Option(help="Where to write the routeaudit log file (JSONL).")
+        Path, typer.Option(help="Where to write the llm-route-audit log file (JSONL).")
     ] = Path("logs.jsonl"),
     task_tag_prefix: Annotated[
         str,
@@ -557,7 +565,7 @@ def import_logs(
         str, typer.Option(help="OpenTelemetry: span attribute that holds the task type.")
     ] = DEFAULT_TASK_ATTRIBUTE,
 ) -> None:
-    """Convert logs from LiteLLM, Langfuse or OpenTelemetry into routeaudit's log format."""
+    """Convert logs from LiteLLM, Langfuse or OpenTelemetry into llm-route-audit's log format."""
     if fmt is ImportFormat.langfuse:
         result = import_langfuse(source, task_tag_prefix, task_from_name)
     elif fmt is ImportFormat.otel:
@@ -604,7 +612,7 @@ def monitor(
             exists=True,
             dir_okay=False,
             readable=True,
-            help="Policy written by `routeaudit export` (YAML format).",
+            help="Policy written by `llm-route-audit export` (YAML format).",
         ),
     ],
     config: Annotated[
@@ -678,7 +686,7 @@ def monitor(
         if not any(r.switched for r in policy.routes.values()):
             typer.echo(
                 "The policy has no switched routes with an audited pass rate. Re-export it "
-                "with this version of routeaudit."
+                "with this version of llm-route-audit."
             )
         return
 

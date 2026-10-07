@@ -58,6 +58,6 @@
 <text class="num inv" x="151.7" y="84.0" text-anchor="middle">4</text>
 <circle class="dot policy" cx="486" cy="232" r="10"/>
 <text class="num inv" x="486" y="236" text-anchor="middle">4</text>
-<text class="legend" x="506" y="236">routeaudit policy</text>
+<text class="legend" x="506" y="236">Per-task policy</text>
 <text class="legend-sub" x="506" y="253">quality 100%, cost 26%</text>
 </svg>

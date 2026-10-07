@@ -3,10 +3,10 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from routeaudit.cli import app
-from routeaudit.ingest import langfuse, otel
-from routeaudit.ingest.common import Skip, read_items, text_of
-from routeaudit.ingest.jsonl import load_jsonl
+from llm_route_audit.cli import app
+from llm_route_audit.ingest import langfuse, otel
+from llm_route_audit.ingest.common import Skip, read_items, text_of
+from llm_route_audit.ingest.jsonl import load_jsonl
 
 # --- Langfuse -----------------------------------------------------------------------------
 

@@ -3,7 +3,7 @@ import json
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from routeaudit.grading.checks import (
+from llm_route_audit.grading.checks import (
     Check,
     ContainsCheck,
     ExactMatchCheck,

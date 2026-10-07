@@ -1,10 +1,10 @@
-from routeaudit.grading.judge import (
+from llm_route_audit.grading.judge import (
     combine,
     from_candidate_side,
     judge_messages,
     parse_verdict,
 )
-from routeaudit.records import Message
+from llm_route_audit.records import Message
 
 
 def test_parse_verdict_takes_the_last_verdict_line():

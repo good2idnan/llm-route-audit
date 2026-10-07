@@ -1,7 +1,7 @@
 """Replay requests through OpenRouter, one API key for many providers' models.
 
 Candidates are named "openrouter/<model id>", e.g. "openrouter/anthropic/claude-haiku-4.5".
-OpenRouter reports what each call actually cost, and routeaudit uses that figure.
+OpenRouter reports what each call actually cost, and llm-route-audit uses that figure.
 """
 
 import json
@@ -11,10 +11,10 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from routeaudit.candidates import Candidate
-from routeaudit.costs import ModelPrice
-from routeaudit.providers.base import Completion, ProviderError
-from routeaudit.records import Message
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.costs import ModelPrice
+from llm_route_audit.providers.base import Completion, ProviderError
+from llm_route_audit.records import Message
 
 BASE_URL = "https://openrouter.ai/api/v1"
 TIMEOUT_SECONDS = 600
@@ -86,7 +86,7 @@ class OpenRouterProvider:
             headers={
                 "Authorization": f"Bearer {self._key()}",
                 "Content-Type": "application/json",
-                "X-OpenRouter-Title": "routeaudit",
+                "X-OpenRouter-Title": "llm-route-audit",
             },
         )
         for attempt in range(MAX_RETRIES + 1):

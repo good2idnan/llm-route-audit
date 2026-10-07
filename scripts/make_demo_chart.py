@@ -8,11 +8,11 @@ Run from the repo root:  uv run python scripts/make_demo_chart.py
 
 from pathlib import Path
 
-from routeaudit.costs import load_prices
-from routeaudit.ingest.jsonl import load_jsonl
-from routeaudit.replay import load_results
-from routeaudit.report import build_report, load_grades
-from routeaudit.report_view import render_svg
+from llm_route_audit.costs import load_prices
+from llm_route_audit.ingest.jsonl import load_jsonl
+from llm_route_audit.replay import load_results
+from llm_route_audit.report import build_report, load_grades
+from llm_route_audit.report_view import render_svg
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "docs" / "images" / "demo-chart.svg"

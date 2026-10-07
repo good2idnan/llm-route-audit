@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from routeaudit import __version__
-from routeaudit.cli import app
+from llm_route_audit import __version__
+from llm_route_audit.cli import app
 
 runner = CliRunner()
 SAMPLE = Path(__file__).resolve().parent.parent / "examples" / "sample_logs.jsonl"
@@ -93,7 +93,7 @@ CANDIDATES = SAMPLE.parent / "candidates.yaml"
 
 class EchoProvider:
     def complete(self, candidate, messages):
-        from routeaudit.providers.base import Completion
+        from llm_route_audit.providers.base import Completion
 
         return Completion(text="ok", input_tokens=100, output_tokens=10)
 
@@ -115,7 +115,7 @@ def _replay_args(tmp_path, *extra):
 
 
 def test_replay_dry_run_sends_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: pytest.fail("no calls"))
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: pytest.fail("no calls"))
     result = runner.invoke(app, _replay_args(tmp_path, "--dry-run"))
     assert result.exit_code == 0
     assert "10 requests x 3 candidates = 30 answers" in result.output
@@ -124,7 +124,7 @@ def test_replay_dry_run_sends_nothing(tmp_path, monkeypatch):
 
 
 def test_replay_asks_before_spending(tmp_path, monkeypatch):
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: pytest.fail("no calls"))
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: pytest.fail("no calls"))
     result = runner.invoke(app, _replay_args(tmp_path), input="n\n")
     assert result.exit_code == 1
     assert "Spend about $" in result.output
@@ -132,14 +132,14 @@ def test_replay_asks_before_spending(tmp_path, monkeypatch):
 
 
 def test_replay_respects_budget(tmp_path, monkeypatch):
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: pytest.fail("no calls"))
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: pytest.fail("no calls"))
     result = runner.invoke(app, _replay_args(tmp_path, "--budget", "0.001", "--yes"))
     assert result.exit_code == 1
     assert "over your budget" in result.output
 
 
 def test_replay_writes_answers(tmp_path, monkeypatch):
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: EchoProvider())
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: EchoProvider())
     result = runner.invoke(app, _replay_args(tmp_path, "--yes"))
     assert result.exit_code == 0, result.output
     assert "Replay finished: 30 new answers, 0 from cache." in result.output
@@ -159,7 +159,7 @@ GRADING = SAMPLE.parent / "grading.yaml"
 
 class TieJudge:
     def complete(self, candidate, messages):
-        from routeaudit.providers.base import Completion
+        from llm_route_audit.providers.base import Completion
 
         return Completion(text="Same.\nVERDICT: TIE", input_tokens=300, output_tokens=20)
 
@@ -183,15 +183,17 @@ def _grade_args(tmp_path, *extra):
 def test_grade_needs_a_replay_first(tmp_path):
     result = runner.invoke(app, _grade_args(tmp_path))
     assert result.exit_code == 1
-    assert "Run `routeaudit replay` first" in result.output
+    assert "Run `llm-route-audit replay` first" in result.output
 
 
 def test_grade_end_to_end(tmp_path, monkeypatch):
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: EchoProvider())
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: EchoProvider())
     assert runner.invoke(app, _replay_args(tmp_path, "--yes")).exit_code == 0
 
     # EchoProvider answers "ok": it fails every task's exact checks, so no judge calls are needed.
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: pytest.fail("no judge calls"))
+    monkeypatch.setattr(
+        "llm_route_audit.cli.get_provider", lambda name: pytest.fail("no judge calls")
+    )
     dry = runner.invoke(app, _grade_args(tmp_path, "--dry-run"))
     assert dry.exit_code == 0, dry.output
     assert "Grading plan: 30 replayed answers (+ 10 originals" in dry.output
@@ -227,7 +229,7 @@ def test_grade_with_judge(tmp_path, monkeypatch):
         + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: TieJudge())
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: TieJudge())
     result = runner.invoke(app, _grade_args(tmp_path, "--yes"))
     assert result.exit_code == 0, result.output
     assert "Judge calls to make: 2" in result.output
@@ -235,7 +237,7 @@ def test_grade_with_judge(tmp_path, monkeypatch):
 
 
 def test_report_and_export_after_grading(tmp_path, monkeypatch):
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: EchoProvider())
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: EchoProvider())
     assert runner.invoke(app, _replay_args(tmp_path, "--yes")).exit_code == 0
     assert runner.invoke(app, _grade_args(tmp_path)).exit_code == 0
 
@@ -268,4 +270,4 @@ def test_report_needs_grades_first(tmp_path):
         app, ["report", str(SAMPLE), "--replay", str(SAMPLE), "--grades", str(tmp_path / "none")]
     )
     assert result.exit_code == 1
-    assert "Run `routeaudit grade` first" in result.output
+    assert "Run `llm-route-audit grade` first" in result.output

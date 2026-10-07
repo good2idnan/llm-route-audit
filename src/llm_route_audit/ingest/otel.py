@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from routeaudit.ingest.common import (
+from llm_route_audit.ingest.common import (
     AGENT_TURN,
     CHAT_ROLES,
     NOT_JSON,
@@ -28,7 +28,7 @@ from routeaudit.ingest.common import (
     read_items,
     text_of,
 )
-from routeaudit.records import LogRecord
+from llm_route_audit.records import LogRecord
 
 DEFAULT_TASK_ATTRIBUTE = "task_type"
 STATUS_ERROR = 2

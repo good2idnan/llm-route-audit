@@ -4,8 +4,8 @@ import math
 import random
 from collections import defaultdict
 
-from routeaudit.analyze import UNLABELLED
-from routeaudit.records import LogRecord
+from llm_route_audit.analyze import UNLABELLED
+from llm_route_audit.records import LogRecord
 
 
 def allocate(group_sizes: dict[str, int], size: int) -> dict[str, int]:

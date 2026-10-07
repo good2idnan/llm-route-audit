@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from routeaudit.candidates import Candidate
-from routeaudit.records import Message
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.records import Message
 
 
 @dataclass

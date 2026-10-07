@@ -2,9 +2,9 @@
 
 import html
 
-from routeaudit.display import INDENT, pct, table, usd
-from routeaudit.grading.grade import ORIGINAL
-from routeaudit.report import OptionStats, Report, Strategy
+from llm_route_audit.display import INDENT, pct, table, usd
+from llm_route_audit.grading.grade import ORIGINAL
+from llm_route_audit.report import OptionStats, Report, Strategy
 
 
 def _rate(option: OptionStats) -> str:

@@ -10,15 +10,15 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from routeaudit.analyze import UNLABELLED, estimate_tokens
-from routeaudit.candidates import Candidate
-from routeaudit.costs import PriceTable
-from routeaudit.grading.grade import ORIGINAL, Grade, GradingConfig, judge_upper_bound
-from routeaudit.policy import Policy, Route
-from routeaudit.records import LogRecord
-from routeaudit.replay import ReplayResult, candidate_cost
-from routeaudit.report import wilson_interval
-from routeaudit.runner import Execution, Job
+from llm_route_audit.analyze import UNLABELLED, estimate_tokens
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.costs import PriceTable
+from llm_route_audit.grading.grade import ORIGINAL, Grade, GradingConfig, judge_upper_bound
+from llm_route_audit.policy import Policy, Route
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import ReplayResult, candidate_cost
+from llm_route_audit.report import wilson_interval
+from llm_route_audit.runner import Execution, Job
 
 DEFAULT_PER_TASK = 20
 DEFAULT_TOLERANCE = 0.05
@@ -186,8 +186,8 @@ def render_monitor(
     shadow_failed: int,
     out_path: str,
 ) -> str:
-    from routeaudit.display import INDENT, pct, table, usd
-    from routeaudit.report_view import short_name
+    from llm_route_audit.display import INDENT, pct, table, usd
+    from llm_route_audit.report_view import short_name
 
     references = sorted({c.reference.label for c in plan.checks})
     lines = [

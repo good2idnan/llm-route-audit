@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from routeaudit.records import LogRecord
+from llm_route_audit.records import LogRecord
 
 BASE = {"id": "r1", "timestamp": "2026-10-01T09:00:00Z", "model": "m", "response": "ok"}
 

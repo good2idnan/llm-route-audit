@@ -6,15 +6,15 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from routeaudit.cache import ResultCache
-from routeaudit.cli import app
-from routeaudit.costs import ModelPrice, PriceTable
-from routeaudit.grading.grade import GradingConfig, plan_grades, run_judges
-from routeaudit.monitor import assess, grading_inputs, plan_monitor
-from routeaudit.policy import Policy, load_policy
-from routeaudit.providers.base import Completion
-from routeaudit.records import LogRecord
-from routeaudit.runner import execute
+from llm_route_audit.cache import ResultCache
+from llm_route_audit.cli import app
+from llm_route_audit.costs import ModelPrice, PriceTable
+from llm_route_audit.grading.grade import GradingConfig, plan_grades, run_judges
+from llm_route_audit.monitor import assess, grading_inputs, plan_monitor
+from llm_route_audit.policy import Policy, load_policy
+from llm_route_audit.providers.base import Completion
+from llm_route_audit.records import LogRecord
+from llm_route_audit.runner import execute
 
 PRICES = PriceTable(
     updated=date(2026, 10, 1),
@@ -129,7 +129,7 @@ def test_too_few_checks_waits():
 def test_policy_fields_from_export():
     import test_report
 
-    from routeaudit.report import build_report, policy_yaml
+    from llm_route_audit.report import build_report, policy_yaml
 
     report = build_report(*test_report.scenario(), test_report.PRICES)
     policy = Policy.model_validate(yaml.safe_load(policy_yaml(report)))
@@ -154,7 +154,7 @@ def test_monitor_command_exits_2_on_alert(tmp_path, monkeypatch):
         "  claude-small: {input: 1, output: 5}\n",
         "utf-8",
     )
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: ReferenceModel())
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: ReferenceModel())
     args = [
         "monitor",
         str(logs),

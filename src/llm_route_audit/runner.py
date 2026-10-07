@@ -9,10 +9,10 @@ from collections.abc import Callable
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from routeaudit.cache import ResultCache, request_key
-from routeaudit.candidates import Candidate
-from routeaudit.providers.base import Completion, Provider, ProviderError
-from routeaudit.records import Message
+from llm_route_audit.cache import ResultCache, request_key
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.providers.base import Completion, Provider, ProviderError
+from llm_route_audit.records import Message
 
 
 @dataclass

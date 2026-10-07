@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from routeaudit.ingest.common import (
+from llm_route_audit.ingest.common import (
     AGENT_TURN,
     DEFAULT_TASK_TAG_PREFIX,
     NOT_JSON,
@@ -26,7 +26,7 @@ from routeaudit.ingest.common import (
     tagged_task,
     write_records,
 )
-from routeaudit.records import LogRecord
+from llm_route_audit.records import LogRecord
 
 __all__ = ["DEFAULT_TASK_TAG_PREFIX", "Skip", "convert", "import_litellm", "write_records"]
 

@@ -14,11 +14,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from routeaudit.analyze import UNLABELLED, build_profile, usage_of
-from routeaudit.costs import PriceTable, UnknownModelError
-from routeaudit.grading.grade import ORIGINAL
-from routeaudit.records import LogRecord
-from routeaudit.replay import ReplayResult
+from llm_route_audit.analyze import UNLABELLED, build_profile, usage_of
+from llm_route_audit.costs import PriceTable, UnknownModelError
+from llm_route_audit.grading.grade import ORIGINAL
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import ReplayResult
 
 DEFAULT_TARGET = 0.95  # keep at least 95% of the original's pass rate
 DEFAULT_MIN_SAMPLES = 10
@@ -303,7 +303,7 @@ def _strategies(tasks: list[TaskReport]) -> list[Strategy]:
         strategy.name = f"Always {label}"
         always.append(strategy)
     policy = _weighted(tasks, lambda t: t.choice)
-    policy.name = "routeaudit policy"
+    policy.name = "Per-task policy"
     return [current, *always, policy]
 
 
@@ -316,7 +316,7 @@ def policy_yaml(report: Report) -> str:
     models = Counter(t.original.model for t in report.tasks)
     default = models.most_common(1)[0][0] if models else "unknown"
     lines = [
-        "# routeaudit routing policy",
+        "# llm-route-audit routing policy",
         f"# Generated {report.generated_at:%Y-%m-%d %H:%M} UTC. Quality target: "
         f"{report.target:.0%} of the original pass rate, at least {report.min_samples} "
         f"graded answer{'' if report.min_samples == 1 else 's'} per option.",
@@ -334,7 +334,7 @@ def policy_yaml(report: Report) -> str:
         if c.label != ORIGINAL and c.provider:
             fields.append(f"provider: {c.provider}")
         if c.label != ORIGINAL and c.pass_rate is not None:
-            # What the audit measured, so `routeaudit monitor` can check it still holds.
+            # What the audit measured, so `llm-route-audit monitor` can check it still holds.
             fields.append(f"reference: {json.dumps(t.original.model)}")
             fields.append(f"expected_pass_rate: {c.pass_rate:.3f}")
         evidence = t.reason

@@ -6,9 +6,9 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from routeaudit.candidates import Candidate
-from routeaudit.providers.base import Completion, ProviderError
-from routeaudit.records import Message
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.providers.base import Completion, ProviderError
+from llm_route_audit.records import Message
 
 DEFAULT_HOST = "http://localhost:11434"
 TIMEOUT_SECONDS = 600

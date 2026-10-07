@@ -2,10 +2,10 @@
 
 from collections import Counter
 
-from routeaudit.analyze import UNLABELLED, GroupStats, TrafficProfile, percentile
-from routeaudit.grading.grade import ORIGINAL, GradePlan, GradeRun
-from routeaudit.records import LogRecord
-from routeaudit.replay import CandidateEstimate, ReplayRun
+from llm_route_audit.analyze import UNLABELLED, GroupStats, TrafficProfile, percentile
+from llm_route_audit.grading.grade import ORIGINAL, GradePlan, GradeRun
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import CandidateEstimate, ReplayRun
 
 INDENT = "  "
 

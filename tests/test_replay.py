@@ -2,12 +2,12 @@ from datetime import date
 
 import pytest
 
-from routeaudit.cache import ResultCache, request_key
-from routeaudit.candidates import Candidate
-from routeaudit.costs import ModelPrice, PriceTable
-from routeaudit.providers.base import Completion, ProviderError
-from routeaudit.records import LogRecord, Message
-from routeaudit.replay import estimate, logged_cost, run_replay
+from llm_route_audit.cache import ResultCache, request_key
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.costs import ModelPrice, PriceTable
+from llm_route_audit.providers.base import Completion, ProviderError
+from llm_route_audit.records import LogRecord, Message
+from llm_route_audit.replay import estimate, logged_cost, run_replay
 
 PRICES = PriceTable(
     updated=date(2026, 9, 25),

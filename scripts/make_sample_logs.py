@@ -1,7 +1,7 @@
 """Generate examples/sample_logs.jsonl: 200 synthetic requests from one SaaS support team.
 
 Scenario: "Brightpath Hosting" sends every AI request to claude-opus-5-5. That is the
-setup routeaudit is built to audit. All people, companies, domains and amounts are invented.
+setup llm-route-audit is built to audit. All people, companies, domains and amounts are invented.
 
 Run from the repo root:  uv run python scripts/make_sample_logs.py
 """

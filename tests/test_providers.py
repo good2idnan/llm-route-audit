@@ -7,11 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from routeaudit.candidates import Candidate
-from routeaudit.providers import ollama
-from routeaudit.providers.anthropic import build_request, parse_response
-from routeaudit.providers.base import ProviderError
-from routeaudit.records import Message
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.providers import ollama
+from llm_route_audit.providers.anthropic import build_request, parse_response
+from llm_route_audit.providers.base import ProviderError
+from llm_route_audit.records import Message
 
 MESSAGES = [
     Message(role="system", content="Be brief."),

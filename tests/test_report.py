@@ -3,18 +3,18 @@ from datetime import date
 import pytest
 import yaml
 
-from routeaudit.costs import ModelPrice, PriceTable
-from routeaudit.grading.grade import ORIGINAL
-from routeaudit.records import LogRecord
-from routeaudit.replay import ReplayResult
-from routeaudit.report import (
+from llm_route_audit.costs import ModelPrice, PriceTable
+from llm_route_audit.grading.grade import ORIGINAL
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import ReplayResult
+from llm_route_audit.report import (
     OptionStats,
     build_report,
     policy_litellm,
     policy_yaml,
     wilson_interval,
 )
-from routeaudit.report_view import render_html, render_text
+from llm_route_audit.report_view import render_html, render_text
 
 PRICES = PriceTable(updated=date(2026, 10, 1), models={"big": ModelPrice(input=10, output=50)})
 
@@ -134,7 +134,7 @@ def test_policy_yaml_is_valid_and_explains_each_route():
 def test_renderers_produce_text_and_self_contained_html():
     report = build_report(*scenario(), PRICES)
     text = render_text(report, html_path="r.html")
-    assert "routeaudit policy" in text and "HTML report saved to r.html" in text
+    assert "Per-task policy" in text and "HTML report saved to r.html" in text
     page = render_html(report, source="logs.jsonl")
     assert page.startswith("<!doctype html>")
     assert "<svg" in page and "Projected savings" in page
@@ -162,22 +162,22 @@ def test_judge_agreement_is_counted_from_grades():
 def test_standalone_svg_has_fixed_colours_and_parses():
     import xml.etree.ElementTree as ET
 
-    from routeaudit.report_view import render_svg, short_name
+    from llm_route_audit.report_view import render_svg, short_name
 
     svg = render_svg(build_report(*scenario(), PRICES), title="Demo", subtitle="tiny sample")
     ET.fromstring(svg)  # valid XML
     assert "var(--" not in svg  # GitHub can't resolve CSS variables inside images
-    assert "routeaudit policy" in svg
+    assert "Per-task policy" in svg
     assert short_name("Always openrouter/anthropic/claude-haiku-4.5") == "Always claude-haiku-4.5"
 
 
 def test_demo_results_in_the_repo_still_load():
     from pathlib import Path
 
-    from routeaudit.costs import load_prices
-    from routeaudit.ingest.jsonl import load_jsonl
-    from routeaudit.replay import load_results
-    from routeaudit.report import load_grades
+    from llm_route_audit.costs import load_prices
+    from llm_route_audit.ingest.jsonl import load_jsonl
+    from llm_route_audit.replay import load_results
+    from llm_route_audit.report import load_grades
 
     root = Path(__file__).resolve().parent.parent
     report = build_report(

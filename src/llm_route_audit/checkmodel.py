@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from routeaudit.grading.grade import ORIGINAL, Grade
-from routeaudit.records import LogRecord
-from routeaudit.replay import ReplayResult
-from routeaudit.report import Report
+from llm_route_audit.grading.grade import ORIGINAL, Grade
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import ReplayResult
+from llm_route_audit.report import Report
 
 
 def label(model: str, effort: str | None) -> str:
@@ -87,8 +87,8 @@ def _name(choice_label: str, original_model: str) -> str:
 def render_check(
     new_label: str, changes: list[TaskChange], before: Report, after: Report, spent: float
 ) -> str:
-    from routeaudit.display import INDENT, pct, table, usd
-    from routeaudit.report_view import short_name
+    from llm_route_audit.display import INDENT, pct, table, usd
+    from llm_route_audit.report_view import short_name
 
     def rate(value: float | None) -> str:
         return "-" if value is None else pct(value)
@@ -118,7 +118,7 @@ def render_check(
     if wins:
         lines.append(
             f"{short_name(new_label)} becomes the best choice for: {', '.join(wins)}. "
-            "Run `routeaudit export` to update the policy."
+            "Run `llm-route-audit export` to update the policy."
         )
     else:
         lines.append(f"{short_name(new_label)} does not change the policy.")

@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from routeaudit.costs import ModelPrice, PriceTable, UnknownModelError, load_prices
+from llm_route_audit.costs import ModelPrice, PriceTable, UnknownModelError, load_prices
 
 
 def test_bundled_price_table_loads():

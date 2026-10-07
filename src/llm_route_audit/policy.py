@@ -1,12 +1,12 @@
-"""Read the routing policy written by `routeaudit export`."""
+"""Read the routing policy written by `llm-route-audit export`."""
 
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from routeaudit.candidates import Effort
-from routeaudit.candidates import Provider as ProviderName
+from llm_route_audit.candidates import Effort
+from llm_route_audit.candidates import Provider as ProviderName
 
 
 class Route(BaseModel):

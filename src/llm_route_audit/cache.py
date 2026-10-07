@@ -6,9 +6,9 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from routeaudit.candidates import Candidate
-from routeaudit.providers.base import Completion
-from routeaudit.records import Message
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.providers.base import Completion
+from llm_route_audit.records import Message
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS completions (

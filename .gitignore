@@ -18,8 +18,8 @@ dist/
 .coverage
 htmlcov/
 
-# routeaudit outputs (replay cache, generated reports)
-.routeaudit/
+# llm-route-audit outputs (replay cache, generated reports)
+.llm-route-audit/
 *.sqlite
 *.sqlite3
 reports/

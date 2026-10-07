@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
-from routeaudit.costs import PriceTable, UnknownModelError
-from routeaudit.records import LogRecord
+from llm_route_audit.costs import PriceTable, UnknownModelError
+from llm_route_audit.records import LogRecord
 
 UNLABELLED = "(unlabelled)"
 CHARS_PER_TOKEN = 4

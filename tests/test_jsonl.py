@@ -1,6 +1,6 @@
 import json
 
-from routeaudit.ingest.jsonl import load_jsonl
+from llm_route_audit.ingest.jsonl import load_jsonl
 
 
 def _line(**overrides):

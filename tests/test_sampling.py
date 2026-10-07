@@ -1,7 +1,7 @@
 from collections import Counter
 
-from routeaudit.records import LogRecord
-from routeaudit.sampling import allocate, stratified_sample
+from llm_route_audit.records import LogRecord
+from llm_route_audit.sampling import allocate, stratified_sample
 
 
 def records(counts: dict[str, int]) -> list[LogRecord]:

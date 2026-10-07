@@ -3,13 +3,13 @@ import json
 import test_report
 from typer.testing import CliRunner
 
-from routeaudit.checkmodel import compare, merge_grades, merge_results, sample_records
-from routeaudit.cli import app
-from routeaudit.grading.grade import ORIGINAL, Grade
-from routeaudit.ingest.jsonl import load_jsonl
-from routeaudit.providers.base import Completion
-from routeaudit.replay import ReplayResult, load_results
-from routeaudit.report import build_report, load_grades
+from llm_route_audit.checkmodel import compare, merge_grades, merge_results, sample_records
+from llm_route_audit.cli import app
+from llm_route_audit.grading.grade import ORIGINAL, Grade
+from llm_route_audit.ingest.jsonl import load_jsonl
+from llm_route_audit.providers.base import Completion
+from llm_route_audit.replay import ReplayResult, load_results
+from llm_route_audit.report import build_report, load_grades
 
 
 def result(record_id: str, model: str, effort: str | None = None, cost: float = 0.001):
@@ -124,7 +124,7 @@ def test_check_model_command_updates_the_audit(tmp_path, monkeypatch):
         "  claude-old: {input: 1, output: 5}\n  claude-new: {input: 1, output: 5}\n",
         "utf-8",
     )
-    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: Copycat())
+    monkeypatch.setattr("llm_route_audit.cli.get_provider", lambda name: Copycat())
     args = [
         "check-model",
         str(logs),

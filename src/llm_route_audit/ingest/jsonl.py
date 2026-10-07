@@ -1,4 +1,4 @@
-"""Read routeaudit's native JSONL log format (one LogRecord per line)."""
+"""Read llm-route-audit's native JSONL log format (one LogRecord per line)."""
 
 import json
 from dataclasses import dataclass, field
@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from routeaudit.records import LogRecord
+from llm_route_audit.records import LogRecord
 
 
 @dataclass

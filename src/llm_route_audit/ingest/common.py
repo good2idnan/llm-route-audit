@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from routeaudit.records import LogRecord
+from llm_route_audit.records import LogRecord
 
 DEFAULT_TASK_TAG_PREFIX = "task:"
 CHAT_ROLES = {"system", "user", "assistant"}

@@ -1,4 +1,4 @@
-"""The log record format that every routeaudit command reads."""
+"""The log record format that every llm-route-audit command reads."""
 
 from datetime import UTC, datetime
 from typing import Any, Literal

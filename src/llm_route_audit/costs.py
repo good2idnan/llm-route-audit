@@ -61,7 +61,7 @@ class PriceTable(BaseModel):
 def load_prices(path: str | Path | None = None) -> PriceTable:
     """Load a prices file, or the bundled default table when no path is given."""
     if path is None:
-        text = files("routeaudit").joinpath("data/prices.yaml").read_text(encoding="utf-8")
+        text = files("llm_route_audit").joinpath("data/prices.yaml").read_text(encoding="utf-8")
     else:
         text = Path(path).read_text(encoding="utf-8")
     return PriceTable.model_validate(yaml.safe_load(text))

@@ -7,13 +7,13 @@ from datetime import date
 
 import pytest
 
-from routeaudit.cache import ResultCache
-from routeaudit.candidates import Candidate
-from routeaudit.costs import ModelPrice, PriceTable
-from routeaudit.providers.base import Completion, ProviderError
-from routeaudit.records import LogRecord
-from routeaudit.replay import run_replay, worst_case_cost
-from routeaudit.runner import Job, SpendGuard
+from llm_route_audit.cache import ResultCache
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.costs import ModelPrice, PriceTable
+from llm_route_audit.providers.base import Completion, ProviderError
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import run_replay, worst_case_cost
+from llm_route_audit.runner import Job, SpendGuard
 
 PRICES = PriceTable(updated=date(2026, 10, 1), models={"claude-x": ModelPrice(input=1, output=10)})
 CANDIDATE = Candidate(model="claude-x", provider="anthropic", max_tokens=1000)

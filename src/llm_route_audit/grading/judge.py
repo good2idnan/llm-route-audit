@@ -8,7 +8,7 @@ result counts as a tie.
 import re
 from typing import Literal
 
-from routeaudit.records import Message
+from llm_route_audit.records import Message
 
 Verdict = Literal["A", "B", "TIE"]
 Result = Literal["win", "tie", "loss"]

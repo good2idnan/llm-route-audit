@@ -9,23 +9,23 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from routeaudit.analyze import UNLABELLED, estimate_tokens
-from routeaudit.cache import ResultCache, request_key
-from routeaudit.candidates import Candidate, Effort
-from routeaudit.candidates import Provider as ProviderName
-from routeaudit.costs import PriceTable
-from routeaudit.grading.checks import Check, CheckResult
-from routeaudit.grading.judge import (
+from llm_route_audit.analyze import UNLABELLED, estimate_tokens
+from llm_route_audit.cache import ResultCache, request_key
+from llm_route_audit.candidates import Candidate, Effort
+from llm_route_audit.candidates import Provider as ProviderName
+from llm_route_audit.costs import PriceTable
+from llm_route_audit.grading.checks import Check, CheckResult
+from llm_route_audit.grading.judge import (
     Result,
     combine,
     from_candidate_side,
     judge_messages,
     parse_verdict,
 )
-from routeaudit.providers.base import Provider
-from routeaudit.records import LogRecord
-from routeaudit.replay import ReplayResult, candidate_cost, completion_cost, worst_case_cost
-from routeaudit.runner import Job, execute
+from llm_route_audit.providers.base import Provider
+from llm_route_audit.records import LogRecord
+from llm_route_audit.replay import ReplayResult, candidate_cost, completion_cost, worst_case_cost
+from llm_route_audit.runner import Job, execute
 
 ORIGINAL = "original (as logged)"
 # Judges think before answering; this is a rough allowance for the estimate only.

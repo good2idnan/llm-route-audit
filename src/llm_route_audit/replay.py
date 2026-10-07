@@ -7,13 +7,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from routeaudit.analyze import estimate_tokens, usage_of
-from routeaudit.cache import ResultCache, request_key
-from routeaudit.candidates import Candidate
-from routeaudit.costs import PriceTable, UnknownModelError
-from routeaudit.providers.base import Completion, Provider
-from routeaudit.records import LogRecord
-from routeaudit.runner import Job, execute
+from llm_route_audit.analyze import estimate_tokens, usage_of
+from llm_route_audit.cache import ResultCache, request_key
+from llm_route_audit.candidates import Candidate
+from llm_route_audit.costs import PriceTable, UnknownModelError
+from llm_route_audit.providers.base import Completion, Provider
+from llm_route_audit.records import LogRecord
+from llm_route_audit.runner import Job, execute
 
 
 def candidate_cost(

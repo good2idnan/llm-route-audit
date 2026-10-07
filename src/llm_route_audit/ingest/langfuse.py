@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from routeaudit.ingest.common import (
+from llm_route_audit.ingest.common import (
     AGENT_TURN,
     DEFAULT_TASK_TAG_PREFIX,
     NOT_JSON,
@@ -26,7 +26,7 @@ from routeaudit.ingest.common import (
     tagged_task,
     text_of,
 )
-from routeaudit.records import LogRecord
+from llm_route_audit.records import LogRecord
 
 # Keys Langfuse integrations use for cached input tokens in usageDetails.
 CACHE_READ_KEYS = ("cache_read_input_tokens", "input_cached_tokens", "input_cache_read")

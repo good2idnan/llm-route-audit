@@ -3,8 +3,8 @@
 from collections import Counter
 from pathlib import Path
 
-from routeaudit.costs import load_prices
-from routeaudit.ingest.jsonl import load_jsonl
+from llm_route_audit.costs import load_prices
+from llm_route_audit.ingest.jsonl import load_jsonl
 
 SAMPLE = Path(__file__).resolve().parent.parent / "examples" / "sample_logs.jsonl"
 
