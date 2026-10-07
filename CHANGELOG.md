@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-10-07)
 
+- `llm-route-audit label`: give requests a task type. `--by system-prompt` (default) groups requests that share system instructions, with no extra install. `--by laya` sorts requests into task types you describe with the open laya model, installed with `pip install "llm-route-audit[laya]"`.
 - OpenAI provider: candidates named `openai/<model>`, with `reasoning_effort`, refusal and truncation detection, and automatic price lookup.
 - Any OpenAI-compatible server through `base_url` and `api_key_env` (Groq, Together, vLLM, LM Studio, Ollama's OpenAI API). Servers on your own machine count as free.
 - Effort levels `none` and `minimal` for models that support them.

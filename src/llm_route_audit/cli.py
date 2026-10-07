@@ -46,6 +46,13 @@ from llm_route_audit.ingest.jsonl import LoadResult, load_jsonl
 from llm_route_audit.ingest.langfuse import import_langfuse
 from llm_route_audit.ingest.litellm import import_litellm
 from llm_route_audit.ingest.otel import DEFAULT_TASK_ATTRIBUTE, import_otel
+from llm_route_audit.labeling import (
+    LayaLabeler,
+    LayaUnavailable,
+    apply_labels,
+    label_by_system_prompt,
+    load_tasks,
+)
 from llm_route_audit.monitor import (
     DEFAULT_MIN_CHECKS,
     DEFAULT_PER_TASK,
@@ -910,3 +917,75 @@ def check_model(
     )
     if run.stopped_reason or graded.stopped_reason:
         raise typer.Exit(code=1)
+
+
+class LabelMethod(StrEnum):
+    system_prompt = "system-prompt"
+    laya = "laya"
+
+
+@app.command()
+def label(
+    path: LogsArg,
+    out: Annotated[Path, typer.Option(help="Where to write the labelled log file (JSONL).")],
+    by: Annotated[
+        LabelMethod,
+        typer.Option(
+            help="system-prompt: group requests that share system instructions (free, instant). "
+            "laya: sort into --tasks with the local laya model."
+        ),
+    ] = LabelMethod.system_prompt,
+    tasks: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="laya: YAML file listing your task types and a one-line description of each.",
+        ),
+    ] = None,
+    min_confidence: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="laya: leave a request unlabelled below this."),
+    ] = 0.6,
+    overwrite: Annotated[
+        bool, typer.Option(help="Replace task types the log already has.")
+    ] = False,
+) -> None:
+    """Give each request a task type, so reports can recommend a model per kind of request."""
+    records = _load_records(path)
+    if by is LabelMethod.laya:
+        if tasks is None:
+            typer.echo("--by laya needs --tasks, a YAML file listing your task types.", err=True)
+            raise typer.Exit(code=1)
+        try:
+            labeler = LayaLabeler(load_tasks(tasks), min_confidence=min_confidence)
+        except (yaml.YAMLError, ValidationError) as e:
+            typer.echo(f"Could not read tasks file {tasks}: {e}", err=True)
+            raise typer.Exit(code=1) from None
+        except LayaUnavailable as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(code=1) from None
+        todo = [r for r in records if overwrite or not r.task_type]
+        labels = {}
+        for done, record in enumerate(todo, start=1):
+            labels[record.id] = labeler.label(record)
+            _progress("requests")(done, len(todo))
+    else:
+        labels = label_by_system_prompt(records)
+
+    labelled = apply_labels(records, labels, overwrite=overwrite)
+    write_records(out, labelled)
+    counts = Counter(r.task_type or UNLABELLED for r in labelled)
+    kept = sum(1 for r in records if r.task_type and not overwrite)
+    typer.echo(f"Labelled {len(labelled)} requests, saved to {out.as_posix()}")
+    typer.echo("Task types: " + ", ".join(f"{t} ({n})" for t, n in counts.most_common()))
+    if kept:
+        typer.echo(f"{kept} requests kept the task type they already had (use --overwrite).")
+    if counts.get(UNLABELLED):
+        hint = (
+            "they have no system instructions to group by"
+            if by is LabelMethod.system_prompt
+            else f"laya was less than {min_confidence:.0%} sure or chose none of your tasks"
+        )
+        typer.echo(f"{counts[UNLABELLED]} requests stayed unlabelled: {hint}.")

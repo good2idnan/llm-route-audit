@@ -62,6 +62,7 @@ your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ repo
 | Command | What it does |
 |---|---|
 | `llm-route-audit import` | Convert LiteLLM, Langfuse or OpenTelemetry logs into llm-route-audit's log format |
+| `llm-route-audit label` | Give requests a task type automatically, if your logs don't have one |
 | `llm-route-audit validate` | Check a log file |
 | `llm-route-audit analyze` | Show what your traffic costs today, by task type and model |
 | `llm-route-audit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenAI, OpenRouter, Ollama, any OpenAI-compatible server) |
@@ -185,6 +186,23 @@ Three spending controls work on both `replay` and `grade`:
 
 Only real model calls are imported. Requests that can't be replayed faithfully yet are skipped and counted: failed calls, cache hits, images and tool calls. For OpenTelemetry, turn on GenAI message capture so the spans include the prompts and answers. API keys and other metadata are not copied.
 
+**No task types in your logs?** Recommendations are per task type, so label the requests first:
+
+```bash
+llm-route-audit label logs.jsonl --out labelled.jsonl
+```
+
+By default it groups requests that share the same system instructions, which almost always means the same job, and names each group from them. On the bundled sample it recovers all 5 task types exactly. It is free, instant and needs nothing extra.
+
+To sort requests into task types you define, use the open [laya](https://huggingface.co/convaiinnovations/laya) decision model, which runs on your own machine:
+
+```bash
+pip install "llm-route-audit[laya]"
+llm-route-audit label logs.jsonl --out labelled.jsonl --by laya --tasks tasks.yaml
+```
+
+`tasks.yaml` lists each task type with a one-line description (`tasks: {billing: "payments and refunds", ...}`). Requests laya is unsure about (`--min-confidence`) stay unlabelled. The laya extra installs PyTorch and downloads about 800 MB of model weights the first time.
+
 **Writing your own logs?** Use one JSON object per line:
 
 ```json
@@ -241,4 +259,4 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE) © 2026 Muhammad Idnan
+[MIT](LICENSE)
