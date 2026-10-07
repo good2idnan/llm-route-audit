@@ -13,7 +13,7 @@ from llm_route_audit.grading.grade import GradingConfig, plan_grades, run_judges
 from llm_route_audit.monitor import assess, grading_inputs, plan_monitor
 from llm_route_audit.policy import Policy, load_policy
 from llm_route_audit.providers.base import Completion
-from llm_route_audit.records import LogRecord
+from llm_route_audit.records import LogRecord, ToolCall, ToolDef
 from llm_route_audit.runner import execute
 
 PRICES = PriceTable(
@@ -197,3 +197,37 @@ def test_load_policy_reads_the_file(tmp_path):
     policy = load_policy(path)
     assert policy.routes["t"].label == "b @ low"
     assert not policy.routes["t"].switched
+
+
+class ReferenceAgent:
+    """The strong model always looks the order up first."""
+
+    def complete(self, candidate, messages, tools=None):
+        return Completion("", 50, 10, tool_calls=[ToolCall(name="find_order", arguments={"id": 7})])
+
+
+def test_agent_steps_compare_tool_calls_with_the_reference_model():
+    steps = [
+        LogRecord(
+            id=f"step-{i}",
+            timestamp="2026-10-05T00:00:00Z",
+            model="claude-small",
+            task_type="classify",
+            session_id=f"s{i}",
+            prompt="Refund order 7.",
+            tools=[ToolDef(name="find_order"), ToolDef(name="refund")],
+            response_tool_calls=[
+                ToolCall(name="refund" if i == 0 else "find_order", arguments={"id": 7})
+            ],
+        )
+        for i in range(3)
+    ]
+    plan = plan_monitor(steps, POLICY)
+    cache = ResultCache(":memory:")
+    execution = execute(plan.shadow_jobs(), cache, lambda _: ReferenceAgent())
+    references, answers, _ = grading_inputs(plan, execution)
+    assert references[0].response_tool_calls[0].name == "find_order"
+    assert answers[0].tool_calls == [{"id": None, "name": "refund", "arguments": {"id": 7}}]
+    grades = plan_grades(references, answers, CONFIG).grades
+    outcomes = {g.record_id: g.outcome for g in grades if g.candidate != "original (as logged)"}
+    assert outcomes == {"step-0": "fail", "step-1": "pass", "step-2": "pass"}

@@ -1,0 +1,28 @@
+# How to grade the agent steps in examples/agent_logs.jsonl.
+#
+# Steps where the original model called tools are compared call by call: same tools, same
+# arguments. Arguments listed under ignore_arguments are free text that never matches word
+# for word, so they are left out. Steps where the original replied in text are graded with
+# the checks below (and the judge, if turned on), like any other answer.
+#
+# judge_alternatives: true sends steps that differ to the AI judge, which decides whether
+# the different step is still a reasonable one. That costs judge calls; it is off here, so
+# grading this example is free.
+judge:
+  model: claude-opus-5-5
+
+tasks:
+  refund_request:
+    agent:
+      ignore_arguments: [reason, note]
+      judge_alternatives: false
+    checks:
+      - type: contains
+        values: ["Brightpath Support"]
+
+  site_down:
+    agent:
+      ignore_arguments: [summary]
+    checks:
+      - type: contains
+        values: ["Brightpath Support"]

@@ -14,7 +14,12 @@ from typing import Any
 from llm_route_audit.candidates import Candidate
 from llm_route_audit.costs import ModelPrice
 from llm_route_audit.providers.base import Completion, ProviderError
-from llm_route_audit.records import Message
+from llm_route_audit.providers.tooling import (
+    openai_messages,
+    openai_tools,
+    parse_openai_tool_calls,
+)
+from llm_route_audit.records import Message, ToolDef
 
 BASE_URL = "https://openrouter.ai/api/v1"
 TIMEOUT_SECONDS = 600
@@ -24,12 +29,16 @@ STATUS_BY_FINISH = {"length": "truncated", "content_filter": "refusal"}
 PER_MILLION = 1_000_000
 
 
-def build_request(candidate: Candidate, messages: list[Message]) -> dict[str, Any]:
+def build_request(
+    candidate: Candidate, messages: list[Message], tools: list[ToolDef] | None = None
+) -> dict[str, Any]:
     request: dict[str, Any] = {
         "model": candidate.api_model,
-        "messages": [{"role": m.role, "content": m.content} for m in messages],
+        "messages": openai_messages(messages),
         "max_tokens": candidate.max_tokens,
     }
+    if tools:
+        request["tools"] = openai_tools(tools)
     if candidate.effort:
         request["reasoning"] = {"effort": candidate.effort}
     return request
@@ -53,6 +62,7 @@ def parse_response(data: dict[str, Any]) -> Completion:
         cache_read_tokens=cached,
         status=status or STATUS_BY_FINISH.get(finish, "ok"),
         cost=usage.get("cost"),
+        tool_calls=parse_openai_tool_calls((choice.get("message") or {}).get("tool_calls")),
     )
 
 
@@ -79,10 +89,12 @@ class OpenRouterProvider:
             )
         return key
 
-    def complete(self, candidate: Candidate, messages: list[Message]) -> Completion:
+    def complete(
+        self, candidate: Candidate, messages: list[Message], tools: list[ToolDef] | None = None
+    ) -> Completion:
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
-            data=json.dumps(build_request(candidate, messages)).encode("utf-8"),
+            data=json.dumps(build_request(candidate, messages, tools)).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self._key()}",
                 "Content-Type": "application/json",

@@ -49,6 +49,7 @@ llm-route-audit is not a router. It measures whether routing pays off, and can t
 - **Per task type.** Recommends a model for each kind of request, since one cheaper model rarely fits all of them.
 - **Honest grading.** Exact checks first (JSON, fields, required text), then an AI judge that reads each pair in both orders, with its consistency reported.
 - **Model and effort.** Tests (model, reasoning effort) pairs, not just models.
+- **Agents too.** Audits tool-using agents step by step, and recommends a model per type of session.
 - **Spending you control.** A cost estimate and confirmation before any paid call, plus a hard `--max-spend` limit that can't be exceeded. Answers are cached, so you never pay twice.
 - **Readable output.** An offline HTML report, a YAML policy, or a ready-to-use LiteLLM config.
 - **Local first.** Logs, results and reports stay on your machine.
@@ -154,6 +155,35 @@ uv run llm-route-audit check-model examples/sample_logs.jsonl -m claude-sonnet-5
 
 It replays and grades only the new model, adds its results to your audit files, and shows which tasks it would take over and how projected savings change. To test the "one strong model at lower effort" alternative, check your current model at `--effort low`.
 
+## Agents
+
+Tool-using agents can be audited too. Each logged model call is one step: the history so far (including tool calls and tool results) and what the model did next, either calling tools or replying.
+
+- **Replay.** Each sampled step is replayed with the exact history the original model saw, including the real tool results and the same tool definitions. Whole sessions are sampled, so every session can be followed step by step.
+- **Grade.** When the original called tools, a candidate passes if it calls the same tools with the same arguments. Parallel calls can come in any order, and arguments are compared loosely, as in `match_reference`. Final answers are graded like any other answer.
+- **Report.** For each session type, the report shows how often each model made the same tool calls, how its final answers graded, how many sessions matched at every step, the step where sessions typically went a different way, and the cost of a whole session.
+- **Route whole sessions.** The recommendation is per session type, never per step, so a session stays on one model and keeps its prompt cache. When your log shows caching, costs assume the candidate gets the same cache hits as the original.
+
+Try it on the bundled synthetic support agent ([`examples/agent_logs.jsonl`](examples/agent_logs.jsonl): 40 sessions, two session types):
+
+```bash
+uv run llm-route-audit replay examples/agent_logs.jsonl -c examples/candidates.yaml --sample 40 --max-spend 1.00
+uv run llm-route-audit grade examples/agent_logs.jsonl --config examples/grading-agent.yaml
+uv run llm-route-audit report examples/agent_logs.jsonl
+```
+
+Tune how steps are compared per task type in the grading file:
+
+```yaml
+tasks:
+  refund_request:
+    agent:
+      ignore_arguments: [reason, note]   # free text that never matches word for word
+      judge_alternatives: true           # the judge decides if a different step is still reasonable
+```
+
+Give every step of a session the same `session_id` and the same task type (the session type). Matching the next step is not the same as finishing the task: a model can take a different path that also works, which is what `judge_alternatives` is for. Logs need the tool definitions and full tool results. Re-running sessions against your live tools is not supported.
+
 ## Providers and spending
 
 Name each candidate (and the judge) after where it runs, and put the key in a `.env` file:
@@ -187,7 +217,7 @@ Three spending controls work on both `replay` and `grade`:
 | [Langfuse](https://langfuse.com) observations (UI export or `/api/public/v2/observations`) | `llm-route-audit import observations.json --format langfuse` | trace tag `task:<name>`, or `--task-from-name` |
 | [OpenTelemetry](https://opentelemetry.io) GenAI spans (OTLP JSON, e.g. the Collector's file exporter) | `llm-route-audit import traces.jsonl --format otel` | span attribute `task_type` (`--task-attribute`) |
 
-Only real model calls are imported. Requests that can't be replayed faithfully yet are skipped and counted: failed calls, cache hits, images and tool calls. For OpenTelemetry, turn on GenAI message capture so the spans include the prompts and answers. API keys and other metadata are not copied.
+Only real model calls are imported. Requests that can't be replayed faithfully are skipped and counted: failed calls, cache hits and images. Agent steps keep their tool calls, tool results and tool definitions, and are grouped into sessions: by `litellm_session_id` (or the trace) for LiteLLM, by session or trace for Langfuse, and by `gen_ai.conversation.id` (or the trace) for OpenTelemetry. For OpenTelemetry, turn on GenAI message capture so the spans include the prompts and answers. API keys and other metadata are not copied.
 
 **No task types in your logs?** Recommendations are per task type, so label the requests first:
 
@@ -235,8 +265,10 @@ Names and street addresses are not detected, since they have no fixed pattern. O
 
 | Field | Required | Notes |
 |---|---|---|
-| `id`, `timestamp`, `model`, `response` | Yes | `id` must be unique |
-| `messages` or `prompt` | Yes | Use either one |
+| `id`, `timestamp`, `model` | Yes | `id` must be unique |
+| `messages` or `prompt` | Yes | Use either one. Messages may use the `tool` role and carry `tool_calls` |
+| `response` | Yes, unless the model called tools | The answer text |
+| `response_tool_calls`, `tools`, `session_id` | For agents | Tool calls made (`[{"name", "arguments"}]`), tool definitions (`[{"name", "description", "parameters"}]`), and the session the step belongs to |
 | `input_tokens`, `output_tokens` | No | `input_tokens` counts uncached input only; estimated from text if missing |
 | `cache_read_tokens`, `cache_write_tokens` | No | For cache-aware pricing |
 | `task_type` | No | Strongly recommended: recommendations are per task type |
@@ -262,7 +294,7 @@ Treat it as one signal. Exact checks come first and settle formats and facts for
 At least 10 graded answers per task type before anything is recommended, and 30 or more for confident numbers. The report shows a 95% range for every pass rate.
 
 **Does it handle agents and tool calls?**
-Not yet. Version 0.1 covers single requests, such as chat, extraction, classification and drafting. Agent turns are skipped on import.
+Yes, step by step: each step is replayed with its real history and the tool calls are compared with the original. See [Agents](#agents). Running sessions against your live tools is not supported.
 
 **Is this a router?**
 No. It audits routing and produces a policy. Put the policy in the gateway you already use, for example with the LiteLLM export.

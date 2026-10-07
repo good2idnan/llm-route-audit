@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from llm_route_audit.candidates import Candidate
-from llm_route_audit.records import Message
+from llm_route_audit.records import Message, ToolCall, ToolDef
 
 
 @dataclass
@@ -16,6 +16,8 @@ class Completion:
     status: str = "ok"
     # What the provider actually charged, when it reports it (OpenRouter does).
     cost: float | None = None
+    # Tools the model asked to call instead of (or as well as) answering in text.
+    tool_calls: list[ToolCall] | None = None
 
 
 class ProviderError(Exception):
@@ -33,4 +35,6 @@ class ProviderError(Exception):
 
 
 class Provider(Protocol):
-    def complete(self, candidate: Candidate, messages: list[Message]) -> Completion: ...
+    def complete(
+        self, candidate: Candidate, messages: list[Message], tools: list[ToolDef] | None = None
+    ) -> Completion: ...

@@ -25,13 +25,13 @@ from llm_route_audit.cache import ResultCache, request_key
 from llm_route_audit.candidates import Candidate
 from llm_route_audit.costs import PriceTable
 from llm_route_audit.providers.base import Completion, ProviderError
-from llm_route_audit.records import Message
+from llm_route_audit.records import Message, ToolDef
 from llm_route_audit.replay import candidate_cost, worst_case_cost
 from llm_route_audit.runner import Job
 
 BATCH_DISCOUNT = 0.5
 BATCH_PROVIDERS = frozenset({"anthropic", "openrouter"})
-Items = list[tuple[str, list[Message]]]  # (custom id = cache key, request messages)
+Items = list[tuple[str, list[Message], list[ToolDef] | None]]  # (cache key, messages, tools)
 
 
 class PendingBatch(BaseModel):
@@ -112,26 +112,28 @@ def run_batches(
 
     groups: dict[str, tuple[Candidate, Items]] = {}
     for job in jobs:
-        key = request_key(job.candidate, job.messages)
+        key = request_key(job.candidate, job.messages, job.tools)
         if key in in_flight or cache.get(key) is not None:
             continue
         if job.candidate.provider not in BATCH_PROVIDERS:
             progress.live += 1
             continue
         in_flight.add(key)
-        groups.setdefault(job.candidate.label, (job.candidate, []))[1].append((key, job.messages))
+        groups.setdefault(job.candidate.label, (job.candidate, []))[1].append(
+            (key, job.messages, job.tools)
+        )
 
     budget = max_spend
     for candidate, items in groups.values():
         if budget is not None:
             fitting: Items = []
-            for key, messages in items:
-                worst = worst_case_cost(prices, Job(candidate, messages))
+            for key, messages, tools in items:
+                worst = worst_case_cost(prices, Job(candidate, messages, tools))
                 if worst is None or worst * BATCH_DISCOUNT > budget:
                     progress.held_back += 1
                     continue
                 budget -= worst * BATCH_DISCOUNT
-                fitting.append((key, messages))
+                fitting.append((key, messages, tools))
             items = fitting
         if not items:
             continue
@@ -146,10 +148,10 @@ def run_batches(
             PendingBatch(
                 id=batch_id,
                 candidate=candidate,
-                keys=[key for key, _ in items],
+                keys=[key for key, _, _ in items],
                 input_estimates={
                     key: sum(estimate_tokens(m.content) for m in messages)
-                    for key, messages in items
+                    for key, messages, _ in items
                 },
                 submitted_at=datetime.now(UTC).isoformat(),
             )
@@ -219,8 +221,8 @@ class AnthropicBatches:
         try:
             batch = self._get().messages.batches.create(
                 requests=[
-                    {"custom_id": key, "params": build_request(candidate, messages)}
-                    for key, messages in items
+                    {"custom_id": key, "params": build_request(candidate, messages, tools)}
+                    for key, messages, tools in items
                 ]
             )
         except anthropic.AuthenticationError as e:
@@ -276,8 +278,8 @@ class OpenRouterBatches:
         from llm_route_audit.providers.openrouter import build_request
 
         requests = []
-        for key, messages in items:
-            body = build_request(candidate, messages)
+        for key, messages, tools in items:
+            body = build_request(candidate, messages, tools)
             body.pop("model")  # the batch sets the model once
             requests.append({"custom_id": key, "body": body})
         # OpenRouter asks for endpoint and model to come before the requests.

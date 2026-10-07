@@ -68,13 +68,107 @@ def test_langfuse_accepts_string_input_and_content_parts():
         ({"level": "ERROR"}, "failed request"),
         ({"model": None}, "no model name"),
         ({"input": None}, "no input logged"),
-        ({"output": {"role": "assistant", "content": None, "tool_calls": [{}]}}, "tool calls"),
-        ({"output": None}, "no output logged"),
+        ({"output": {"role": "assistant", "content": None, "tool_calls": [{}]}}, "tool name"),
+        ({"output": None}, "no response logged"),
+        ({"input": [{"role": "function", "content": "x"}]}, "unsupported message role"),
     ],
 )
 def test_langfuse_skips_what_cannot_be_replayed(overrides, reason):
     with pytest.raises(Skip, match=reason):
         langfuse.convert(generation(**overrides))
+
+
+def test_langfuse_agent_step_in_openai_form():
+    record = langfuse.convert(
+        generation(
+            input={
+                "messages": [
+                    {"role": "user", "content": "Refund order 7."},
+                    {
+                        "role": "assistant",
+                        "content": "Looking it up.",
+                        "tool_calls": [
+                            {
+                                "id": "c1",
+                                "function": {"name": "find_order", "arguments": '{"id": 7}'},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "c1", "content": {"status": "paid"}},
+                ],
+                "tools": [{"type": "function", "function": {"name": "find_order"}}],
+            },
+            output={
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c2", "function": {"name": "refund", "arguments": {"order": 7}}}
+                ],
+            },
+        )
+    )
+    assert [m.role for m in record.conversation()] == ["user", "assistant", "tool"]
+    assert record.messages[1].content == "Looking it up."
+    assert record.messages[2].content == '{"status": "paid"}'  # structured results become JSON
+    assert record.response_tool_calls[0].name == "refund"
+    assert record.response_tool_calls[0].arguments == {"order": 7}
+    assert [t.name for t in record.tools] == ["find_order"]
+    assert record.session_id == "trace-1"
+
+
+def test_langfuse_agent_step_in_anthropic_form():
+    record = langfuse.convert(
+        generation(
+            input={
+                "system": "You handle refunds.",
+                "messages": [
+                    {"role": "user", "content": "Refund order 7."},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "t1",
+                                "name": "find_order",
+                                "input": {"id": 7},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "t1",
+                                "content": [{"type": "text", "text": "paid"}],
+                            }
+                        ],
+                    },
+                ],
+                "tools": [{"name": "refund", "input_schema": {"type": "object"}}],
+            },
+            output={
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Refunding."},
+                    {"type": "tool_use", "id": "t2", "name": "refund", "input": {"order": 7}},
+                ],
+            },
+            sessionId="chat-5",
+        )
+    )
+    assert [(m.role, m.content) for m in record.conversation()] == [
+        ("system", "You handle refunds."),
+        ("user", "Refund order 7."),
+        ("assistant", ""),
+        ("tool", "paid"),
+    ]
+    assert record.messages[2].tool_calls[0].arguments == {"id": 7}
+    assert record.messages[3].tool_call_id == "t1"
+    assert record.response == "Refunding."
+    assert record.response_tool_calls[0].name == "refund"
+    assert record.tools[0].parameters == {"type": "object"}
+    assert record.session_id == "chat-5"
 
 
 def test_langfuse_api_response_wrapper_is_unwrapped(tmp_path):
@@ -164,11 +258,11 @@ def test_otel_span_becomes_a_record():
             genai_span(
                 **{
                     "gen_ai.input.messages": json.dumps(
-                        [{"role": "tool", "parts": [{"type": "tool_call_response"}]}]
+                        [{"role": "function", "parts": [{"type": "text", "content": "x"}]}]
                     )
                 }
             ),
-            "tool calls",
+            "unsupported message role",
         ),
         ({"spanId": "x", "name": "GET /health", "attributes": []}, "not a model call"),
     ],
@@ -176,6 +270,89 @@ def test_otel_span_becomes_a_record():
 def test_otel_skips_what_cannot_be_replayed(span, reason):
     with pytest.raises(Skip, match=reason):
         otel.convert(span)
+
+
+def test_otel_agent_step_keeps_tool_parts():
+    span = genai_span(
+        **{
+            "gen_ai.input.messages": json.dumps(
+                [
+                    {"role": "user", "parts": [{"type": "text", "content": "Weather in Oslo?"}]},
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {"type": "reasoning", "content": "I should look it up."},
+                            {
+                                "type": "tool_call",
+                                "id": "c1",
+                                "name": "get_weather",
+                                "arguments": {"city": "Oslo"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "parts": [{"type": "tool_call_response", "id": "c1", "response": "4 C"}],
+                    },
+                ]
+            ),
+            "gen_ai.output.messages": json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "parts": [{"type": "text", "content": "4 C and rain in Oslo."}],
+                        "finish_reason": "stop",
+                    }
+                ]
+            ),
+            "gen_ai.tool.definitions": json.dumps(
+                [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}}]
+            ),
+            "gen_ai.conversation.id": "conv-3",
+        }
+    )
+    record = otel.convert(span)
+    assert [(m.role, m.content) for m in record.conversation()] == [
+        ("system", "Classify."),
+        ("user", "Weather in Oslo?"),
+        ("assistant", ""),  # reasoning is left out
+        ("tool", "4 C"),
+    ]
+    assert record.messages[2].tool_calls[0].name == "get_weather"
+    assert record.messages[3].tool_call_id == "c1"
+    assert record.response == "4 C and rain in Oslo."
+    assert record.response_tool_calls is None
+    assert record.tools[0].name == "get_weather"
+    assert record.session_id == "conv-3"
+
+
+def test_otel_tool_call_answer():
+    span = genai_span(
+        **{
+            "gen_ai.output.messages": json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "id": "c9",
+                                "name": "lookup",
+                                "arguments": '{"q": "x"}',
+                            }
+                        ],
+                        "finish_reason": "tool_call",
+                    }
+                ]
+            )
+        }
+    )
+    record = otel.convert(span)
+    assert record.response == ""
+    assert [(c.id, c.name, c.arguments) for c in record.response_tool_calls] == [
+        ("c9", "lookup", {"q": "x"})
+    ]
+    assert record.session_id == "t1"  # no conversation id: the trace groups the steps
 
 
 def test_otel_reads_collector_file_exports(tmp_path):

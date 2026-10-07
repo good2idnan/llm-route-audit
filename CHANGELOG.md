@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Agent audits: tool-using agents are audited step by step.
+
+- The log format has agent steps: `tool` messages, `tool_calls` on assistant messages, `response_tool_calls`, `tools` (definitions) and `session_id`.
+- `import` keeps agent steps instead of skipping them, for LiteLLM, Langfuse (OpenAI and Anthropic message formats) and OpenTelemetry (`tool_call` and `tool_call_response` parts, `gen_ai.tool.definitions`). Steps are grouped into sessions by session or conversation id, or else by trace.
+- `replay` sends each step's tool definitions and history to Anthropic, OpenAI, OpenRouter, Ollama and OpenAI-compatible servers, in batch mode too, and saves the tool calls the candidate makes. Logs with sessions are sampled as whole sessions.
+- `grade` compares tool steps call by call (same tools, same arguments, any order). Per task: `agent: {ignore_arguments: [...], judge_alternatives: true}` to leave out free-text arguments and to let the judge accept a different but reasonable step. The judge now sees tool calls, tool results and tool definitions.
+- `report` routes agent logs per session type and adds an "Agent sessions, step by step" section: same tool calls, answers passed, sessions that matched at every step, the typical first split, and cost per session.
+- Costs assume a candidate gets the same share of prompt-cache hits as the original when the log shows caching, since a replay never hits the cache.
+- `monitor` checks agent steps by comparing production tool calls with the reference model's.
+- New example: `examples/agent_logs.jsonl` (a synthetic support agent, 40 sessions) with `examples/grading-agent.yaml`.
+
 ## 0.1.3 (2026-10-07)
 
 - `llm-route-audit redact`: hide private data in a copy of your logs, offline. Covers emails, phones, checksum-verified cards, IBANs, SSN and UK NI numbers, IPs, links with tokens, API keys and passwords, and dates of birth, plus your own patterns. Placeholders stay consistent between the request and the original answer.

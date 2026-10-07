@@ -45,6 +45,57 @@ def _agreement_line(report: Report) -> str:
     )
 
 
+SESSIONS_INTRO = (
+    "Every sampled step was replayed with the exact history the original model saw. "
+    "Same tool calls: the option called the same tools with the same arguments. "
+    "First split: the step where a session typically went a different way."
+)
+
+
+def _share(part: int, whole: int) -> str:
+    return "-" if not whole else f"{part}/{whole} ({part / whole:.0%})"
+
+
+def _session_rows(report: Report) -> list[list[str]]:
+    """One row for the original and one per option, for each session type."""
+    rows = []
+    for kind in report.sessions:
+        original = kind.original_cost
+        rows.append([kind.task, ORIGINAL, str(kind.sessions), "-", "-", "-", "-", _money(original)])
+        for o in kind.options:
+            cost = o.cost_per_session
+            ratio = f" ({pct(cost / original)})" if cost is not None and original else ""
+            rows.append(
+                [
+                    "",
+                    o.label,
+                    str(o.sessions),
+                    _share(o.tool_same, o.tool_steps),
+                    _share(o.answers_passed, o.answers),
+                    _share(o.all_same, o.sessions),
+                    "-" if o.typical_split is None else f"step {o.typical_split:g}",
+                    _money(cost) + ratio,
+                ]
+            )
+    return rows
+
+
+SESSION_HEADERS = [
+    "Session type",
+    "Option",
+    "Sessions",
+    "Same tool calls",
+    "Answers passed",
+    "All steps same",
+    "First split",
+    "Cost per session",
+]
+
+
+def _money(value: float | None) -> str:
+    return "-" if value is None else f"${value:.4f}"
+
+
 def render_text(report: Report, html_path: str | None = None) -> str:
     out = [
         "Routing report",
@@ -76,6 +127,9 @@ def render_text(report: Report, html_path: str | None = None) -> str:
                 ]
             )
     out += table(["Task", "Option", "Graded", "Pass", "95% range", "Cost"], rows, text_columns=2)
+    if report.sessions:
+        out += ["", "Agent sessions, step by step", f"{INDENT}{SESSIONS_INTRO}"]
+        out += table(SESSION_HEADERS, _session_rows(report), text_columns=2)
     out += ["", "Whole workload (weighted by traffic)"]
     out += table(
         ["Strategy", "Quality", "Cost vs now", "Coverage"],
@@ -287,11 +341,25 @@ def render_html(report: Report, source: str) -> str:
                 f"<td class='num'>{_ratio(option.cost_ratio)}</td></tr>"
             )
     out.append("</table></div></section>")
+    if report.sessions:
+        out.append(
+            "<section><h2>Agent sessions, step by step</h2>"
+            f"<p class='sub'>{_e(SESSIONS_INTRO)} Routing is per session type, so a session "
+            "never switches models halfway and keeps its prompt cache.</p>"
+            "<div class='panel'><table><tr>"
+        )
+        out.append("".join(f"<th>{_e(h)}</th>" for h in SESSION_HEADERS) + "</tr>")
+        for row in _session_rows(report):
+            cells = [f"<td>{_e(row[0])}</td>", f"<td>{_e(row[1])}</td>"]
+            cells += [f"<td class='num'>{_e(v)}</td>" for v in row[2:]]
+            out.append(f"<tr>{''.join(cells)}</tr>")
+        out.append("</table></div></section>")
     out.append(
         "<footer>Quality is the share of answers that passed every exact check and that the AI "
         "judge rated at least as good as the original. Cost compares each option with the "
         "original on the same sampled requests. Small samples give wide 95% ranges; treat them "
-        "as early signals.</footer>"
+        "as early signals. When the log shows prompt caching, an option's cost assumes it gets the "
+        "same share of cache hits as the original once it serves that traffic.</footer>"
     )
     out.append("</main></body></html>")
     return "\n".join(out)

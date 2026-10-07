@@ -4,6 +4,9 @@ For each task type, every option (the original model and each candidate) gets a 
 from the grades and a cost ratio against the original on the same sampled requests. The
 policy picks, per task, the cheapest option that keeps quality within the target, and only
 when there are enough graded answers to trust the numbers.
+
+Agent logs are routed per session type, never per step: every step of a session counts
+toward its session's type, so a whole session stays on one model and keeps its cache.
 """
 
 import json
@@ -14,11 +17,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from llm_route_audit.agent_report import SessionTypeReport, session_report
 from llm_route_audit.analyze import UNLABELLED, build_profile, usage_of
 from llm_route_audit.costs import PriceTable, UnknownModelError
 from llm_route_audit.grading.grade import ORIGINAL
 from llm_route_audit.records import LogRecord
 from llm_route_audit.replay import ReplayResult
+from llm_route_audit.sampling import session_type, sessions
 
 DEFAULT_TARGET = 0.95  # keep at least 95% of the original's pass rate
 DEFAULT_MIN_SAMPLES = 10
@@ -106,6 +111,7 @@ class Report:
     monthly_cost: float | None
     judged: int = 0  # answers with a verdict from both judge orders
     judge_agreed: int = 0  # ... where both orders gave the same verdict
+    sessions: list[SessionTypeReport] = field(default_factory=list)  # agent logs only
     generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -132,6 +138,7 @@ class Report:
             ),
             "judged": self.judged,
             "judge_agreed": self.judge_agreed,
+            "sessions": [s.to_dict() for s in self.sessions],
             "strategies": [s.__dict__ for s in self.strategies],
             "tasks": [
                 {
@@ -167,8 +174,48 @@ def _logged_cost(prices: PriceTable, record: LogRecord) -> float | None:
         return None
 
 
-def _label(result: ReplayResult) -> str:
-    return f"{result.model} @ {result.effort}" if result.effort else result.model
+def routed_cost(prices: PriceTable, record: LogRecord, result: ReplayResult) -> float | None:
+    """What a request would cost on the candidate if the candidate took over this traffic.
+
+    A replay sends each request once, so it never reads from a prompt cache. In production
+    the candidate would cache the way the original did (a whole session on one model reads
+    most of its history from cache). So when the log shows cache use, the candidate's input
+    is split into uncached, cache-read and cache-write tokens in the original's proportions.
+    """
+    original = usage_of(record)
+    cached = original.cache_read_tokens + original.cache_write_tokens
+    replayed = sum(
+        t or 0 for t in (result.input_tokens, result.cache_read_tokens, result.cache_write_tokens)
+    )
+    if not cached or not replayed or result.output_tokens is None:
+        return result.cost
+    scale = replayed / (original.input_tokens + cached)
+    try:
+        return prices.cost(
+            result.model,
+            input_tokens=round(original.input_tokens * scale),
+            output_tokens=result.output_tokens,
+            cache_read_tokens=round(original.cache_read_tokens * scale),
+            cache_write_tokens=round(original.cache_write_tokens * scale),
+        )
+    except UnknownModelError:
+        return result.cost
+
+
+def by_session_type(records: list[LogRecord]) -> list[LogRecord]:
+    """Records with each agent step's task type set to its session's type."""
+    if not any(r.session_id for r in records):
+        return records
+    kind = {}
+    for steps in sessions(records):
+        name = session_type(steps)
+        kind.update({s.id: name for s in steps})
+    return [
+        r
+        if (r.task_type or UNLABELLED) == kind[r.id]
+        else r.model_copy(update={"task_type": kind[r.id]})
+        for r in records
+    ]
 
 
 def _choose(
@@ -201,6 +248,7 @@ def build_report(
     target: float = DEFAULT_TARGET,
     min_samples: int = DEFAULT_MIN_SAMPLES,
 ) -> Report:
+    records = by_session_type(records)
     by_id = {r.id: r for r in records}
     profile = build_profile(records, prices)
     task_costs = {g.name: g.cost for g in profile.by_task}
@@ -218,13 +266,14 @@ def build_report(
         if record is None:
             continue
         task = record.task_type or UNLABELLED
-        label = _label(result)
+        label = result.label
         option = options[task].setdefault(
             label, OptionStats(label, result.model, result.effort, result.provider)
         )
+        cost = routed_cost(prices, record, result)
         original_cost = _logged_cost(prices, record)
-        if result.cost is not None and original_cost is not None:
-            option.cost += result.cost
+        if cost is not None and original_cost is not None:
+            option.cost += cost
             option.original_cost += original_cost
         outcome = outcomes.get((label, record.id))
         if outcome in ("pass", "fail"):
@@ -269,6 +318,13 @@ def build_report(
         monthly_cost=profile.monthly_cost,
         judged=sum(1 for v in votes if len(v) == 2 and None not in v),
         judge_agreed=sum(1 for v in votes if len(v) == 2 and None not in v and v[0] == v[1]),
+        sessions=session_report(
+            records,
+            results,
+            grades,
+            lambda record, result: routed_cost(prices, record, result),
+            lambda record: _logged_cost(prices, record),
+        ),
     )
 
 

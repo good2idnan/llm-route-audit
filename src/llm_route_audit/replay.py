@@ -12,7 +12,7 @@ from llm_route_audit.cache import ResultCache, request_key
 from llm_route_audit.candidates import Candidate
 from llm_route_audit.costs import PriceTable, UnknownModelError
 from llm_route_audit.providers.base import Completion, Provider
-from llm_route_audit.records import LogRecord
+from llm_route_audit.records import LogRecord, Message
 from llm_route_audit.runner import Job, execute
 
 
@@ -59,9 +59,17 @@ INPUT_SAFETY_MARGIN = 1.5
 PER_MESSAGE_TOKENS = 20
 
 
+def _message_tokens(message: Message) -> int:
+    """Text plus any tool calls or tool-result ids the message carries."""
+    extra = message.model_dump(exclude={"role", "content"}, exclude_none=True)
+    return estimate_tokens(message.content + (json.dumps(extra) if extra else ""))
+
+
 def worst_case_cost(prices: PriceTable, job: Job) -> float | None:
     """The most a call could cost: generous input estimate plus every allowed output token."""
-    input_tokens = sum(estimate_tokens(m.content) + PER_MESSAGE_TOKENS for m in job.messages)
+    input_tokens = sum(_message_tokens(m) + PER_MESSAGE_TOKENS for m in job.messages)
+    if job.tools:
+        input_tokens += estimate_tokens(json.dumps([t.model_dump() for t in job.tools]))
     return candidate_cost(
         prices,
         job.candidate,
@@ -106,7 +114,7 @@ def estimate(
         cost: float | None = 0.0
         cached = 0
         for record in sample:
-            if cache.get(request_key(candidate, record.conversation())) is not None:
+            if cache.get(request_key(candidate, record.conversation(), record.tools)) is not None:
                 cached += 1
                 continue
             usage = usage_of(record)
@@ -140,6 +148,12 @@ class ReplayResult:
     latency_ms: float | None = None
     cached: bool = False
     error: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None  # tools the candidate asked to call
+
+    @property
+    def label(self) -> str:
+        """The option's name in grades and reports, e.g. "claude-sonnet-5-5 @ low"."""
+        return f"{self.model} @ {self.effort}" if self.effort else self.model
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -190,6 +204,9 @@ def _completed(
         cost=completion_cost(prices, candidate, completion),
         latency_ms=latency_ms,
         cached=cached,
+        tool_calls=[c.model_dump() for c in completion.tool_calls]
+        if completion.tool_calls
+        else None,
     )
 
 
@@ -209,7 +226,7 @@ def run_replay(
     """
     pairs = [(record, candidate) for candidate in candidates for record in sample]
     execution = execute(
-        [Job(candidate, record.conversation()) for record, candidate in pairs],
+        [Job(candidate, record.conversation(), record.tools) for record, candidate in pairs],
         cache,
         provider_for,
         concurrency=concurrency,

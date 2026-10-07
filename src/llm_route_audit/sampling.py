@@ -2,7 +2,7 @@
 
 import math
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from llm_route_audit.analyze import UNLABELLED
 from llm_route_audit.records import LogRecord
@@ -30,10 +30,57 @@ def allocate(group_sizes: dict[str, int], size: int) -> dict[str, int]:
     return quota
 
 
+def sessions(records: list[LogRecord]) -> list[list[LogRecord]]:
+    """Records grouped by session_id, steps in time order. Records without one stand alone."""
+    grouped: dict[str, list[LogRecord]] = defaultdict(list)
+    units: list[list[LogRecord]] = []
+    for record in records:
+        if record.session_id:
+            grouped[record.session_id].append(record)
+        else:
+            units.append([record])
+    units += [sorted(steps, key=lambda r: (r.timestamp, r.id)) for steps in grouped.values()]
+    return units
+
+
+def session_type(steps: list[LogRecord]) -> str:
+    """A session's task type: the one most of its steps carry (the earliest step breaks ties)."""
+    counts = Counter(r.task_type or UNLABELLED for r in steps)
+    best = max(counts.values())
+    return next(t for t in (r.task_type or UNLABELLED for r in steps) if counts[t] == best)
+
+
+def _session_sample(records: list[LogRecord], size: int, seed: int) -> list[LogRecord]:
+    """Whole sessions, spread across session types, until each type's step quota is met."""
+    groups: dict[str, list[list[LogRecord]]] = defaultdict(list)
+    for steps in sessions(records):
+        groups[session_type(steps)].append(steps)
+
+    rng = random.Random(seed)
+    quotas = allocate({g: sum(map(len, units)) for g, units in groups.items()}, size)
+    picked: list[LogRecord] = []
+    for group in sorted(groups):
+        units = sorted(groups[group], key=lambda steps: steps[0].id)
+        rng.shuffle(units)
+        taken = 0
+        for steps in units:
+            if taken >= quotas[group]:
+                break
+            picked += steps
+            taken += len(steps)
+    return sorted(picked, key=lambda r: r.id)
+
+
 def stratified_sample(records: list[LogRecord], size: int, seed: int = 0) -> list[LogRecord]:
-    """About `size` records spread across task types. The same seed gives the same sample."""
+    """About `size` records spread across task types. The same seed gives the same sample.
+
+    Agent logs (records with a session_id) are sampled as whole sessions, so every picked
+    session can be followed step by step.
+    """
     if size >= len(records):
         return sorted(records, key=lambda r: r.id)
+    if any(r.session_id for r in records):
+        return _session_sample(records, size, seed)
 
     groups: dict[str, list[LogRecord]] = defaultdict(list)
     for record in records:

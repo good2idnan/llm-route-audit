@@ -11,24 +11,31 @@ import anthropic
 
 from llm_route_audit.candidates import Candidate
 from llm_route_audit.providers.base import Completion, ProviderError
-from llm_route_audit.records import Message
+from llm_route_audit.providers.tooling import (
+    anthropic_messages,
+    anthropic_tools,
+    parse_anthropic_tool_calls,
+)
+from llm_route_audit.records import Message, ToolDef
 
 MAX_RETRIES = 5
 STATUS_BY_STOP_REASON = {"refusal": "refusal", "max_tokens": "truncated"}
 
 
-def build_request(candidate: Candidate, messages: list[Message]) -> dict[str, Any]:
+def build_request(
+    candidate: Candidate, messages: list[Message], tools: list[ToolDef] | None = None
+) -> dict[str, Any]:
     """Messages API arguments. Logged system messages are joined into the `system` field."""
-    system = "\n\n".join(m.content for m in messages if m.role == "system")
+    system, converted = anthropic_messages(messages)
     request: dict[str, Any] = {
         "model": candidate.api_model,
         "max_tokens": candidate.max_tokens,
-        "messages": [
-            {"role": m.role, "content": m.content} for m in messages if m.role != "system"
-        ],
+        "messages": converted,
     }
     if system:
         request["system"] = system
+    if tools:
+        request["tools"] = anthropic_tools(tools)
     if candidate.effort:
         request["output_config"] = {"effort": candidate.effort}
     return request
@@ -43,6 +50,7 @@ def parse_response(response: Any) -> Completion:
         cache_read_tokens=getattr(usage, "cache_read_input_tokens", None) or 0,
         cache_write_tokens=getattr(usage, "cache_creation_input_tokens", None) or 0,
         status=STATUS_BY_STOP_REASON.get(response.stop_reason, "ok"),
+        tool_calls=parse_anthropic_tool_calls(response.content),
     )
 
 
@@ -61,10 +69,12 @@ class AnthropicProvider:
                 ) from e
         return self._client
 
-    def complete(self, candidate: Candidate, messages: list[Message]) -> Completion:
+    def complete(
+        self, candidate: Candidate, messages: list[Message], tools: list[ToolDef] | None = None
+    ) -> Completion:
         client = self._get_client()
         try:
-            response = client.messages.create(**build_request(candidate, messages))
+            response = client.messages.create(**build_request(candidate, messages, tools))
         except anthropic.AuthenticationError as e:
             raise ProviderError(
                 "Anthropic rejected the API key. Check ANTHROPIC_API_KEY.", fatal=True

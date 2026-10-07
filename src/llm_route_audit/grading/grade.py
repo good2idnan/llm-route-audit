@@ -16,14 +16,18 @@ from llm_route_audit.candidates import Provider as ProviderName
 from llm_route_audit.costs import PriceTable
 from llm_route_audit.grading.checks import Check, CheckResult
 from llm_route_audit.grading.judge import (
+    NEXT_STEP_INSTRUCTIONS,
     Result,
     combine,
     from_candidate_side,
     judge_messages,
     parse_verdict,
+    render_action,
+    render_request,
 )
+from llm_route_audit.grading.steps import compare_steps
 from llm_route_audit.providers.base import Provider
-from llm_route_audit.records import LogRecord
+from llm_route_audit.records import LogRecord, ToolCall
 from llm_route_audit.replay import ReplayResult, candidate_cost, completion_cost, worst_case_cost
 from llm_route_audit.runner import Job, execute
 
@@ -32,11 +36,23 @@ ORIGINAL = "original (as logged)"
 JUDGE_OUTPUT_TOKENS = 500
 
 
+class AgentRule(BaseModel):
+    """How agent steps (tool calls) are compared with the original."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Arguments left out of the comparison, e.g. free-text notes that never match exactly.
+    ignore_arguments: list[str] = Field(default_factory=list)
+    # Ask the judge whether a different next step is still a reasonable one.
+    judge_alternatives: bool = False
+
+
 class TaskRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     checks: list[Check] = Field(default_factory=list)
     judge: bool | None = None  # default: judge only when there are no checks
+    agent: AgentRule = Field(default_factory=AgentRule)
 
     @property
     def uses_judge(self) -> bool:
@@ -88,6 +104,7 @@ class Grade:
     judge: Result | None = None
     judge_votes: list[Result | None] = field(default_factory=list)
     reason: str | None = None
+    step: str | None = None  # agent steps: "tool_call" or "answer" (what the original did)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +116,7 @@ class Grade:
             "judge": self.judge,
             "judge_votes": self.judge_votes,
             "reason": self.reason,
+            "step": self.step,
         }
 
 
@@ -132,6 +150,13 @@ def _label(result: ReplayResult) -> str:
     return f"{result.model} @ {result.effort}" if result.effort else result.model
 
 
+def step_kind(record: LogRecord) -> str | None:
+    """For agent steps, what the original model did: called tools or answered."""
+    if not record.is_agent_step:
+        return None
+    return "tool_call" if record.response_tool_calls else "answer"
+
+
 def plan_grades(
     records: list[LogRecord], results: list[ReplayResult], config: GradingConfig
 ) -> GradePlan:
@@ -147,10 +172,23 @@ def plan_grades(
             continue
         seen.add(record.id)
         rule = config.rule_for(record.task_type)
-        checks = [c.run(record.response, record.response) for c in rule.checks]
+        step = step_kind(record)
+        # Answer checks don't apply to a step that called tools.
+        checks = (
+            []
+            if step == "tool_call"
+            else [c.run(record.response, record.response) for c in rule.checks]
+        )
         failed = any(c.passed is False for c in checks)
         plan.grades.append(
-            Grade(record.id, record.task_type, ORIGINAL, "fail" if failed else "pass", checks)
+            Grade(
+                record.id,
+                record.task_type,
+                ORIGINAL,
+                "fail" if failed else "pass",
+                checks,
+                step=step,
+            )
         )
 
     for result in results:
@@ -166,31 +204,77 @@ def plan_grades(
                 Grade(record.id, record.task_type, label, "ungraded", reason=result.error)
             )
             continue
+        step = step_kind(record)
         if result.status in ("refusal", "truncated"):
             plan.grades.append(
-                Grade(record.id, record.task_type, label, "fail", reason=result.status)
+                Grade(record.id, record.task_type, label, "fail", reason=result.status, step=step)
             )
             continue
 
         rule = config.rule_for(record.task_type)
+        calls = [ToolCall.model_validate(c) for c in result.tool_calls or []]
+        if step is not None and (calls or record.response_tool_calls):
+            plan.grades.append(_grade_step(plan, record, result, calls, rule, label, step))
+            continue
+
         checks = [c.run(result.response, record.response) for c in rule.checks]
-        grade = Grade(record.id, record.task_type, label, "pass", checks)
+        grade = Grade(record.id, record.task_type, label, "pass", checks, step=step)
         if any(c.passed is False for c in checks):
             grade.outcome = "fail"
             grade.reason = "failed checks"
         elif rule.uses_judge:
             grade.outcome = "ungraded"
             grade.reason = "waiting for judge"
-            request = record.conversation()
-            plan.judge_pairs.append(
-                (
-                    len(plan.grades),
-                    Job(judge, judge_messages(request, result.response, record.response)),
-                    Job(judge, judge_messages(request, record.response, result.response)),
-                )
-            )
+            _queue_judge(plan, record, result.response, record.response)
         plan.grades.append(grade)
     return plan
+
+
+def _queue_judge(
+    plan: GradePlan,
+    record: LogRecord,
+    candidate: str,
+    original: str,
+    instructions: str | None = None,
+) -> None:
+    """Line up both judge orders for the grade about to be appended."""
+    request = record.conversation()
+    extra = {"instructions": instructions} if instructions else {}
+    plan.judge_pairs.append(
+        (
+            len(plan.grades),
+            Job(plan.judge, judge_messages(request, candidate, original, record.tools, **extra)),
+            Job(plan.judge, judge_messages(request, original, candidate, record.tools, **extra)),
+        )
+    )
+
+
+def _grade_step(
+    plan: GradePlan,
+    record: LogRecord,
+    result: ReplayResult,
+    calls: list[ToolCall],
+    rule: TaskRule,
+    label: str,
+    step: str,
+) -> Grade:
+    """An agent step where either side called tools: compare the calls, and optionally let
+    the judge decide whether a different step is still reasonable."""
+    match = compare_steps(calls, record.response_tool_calls, rule.agent.ignore_arguments)
+    grade = Grade(record.id, record.task_type, label, "pass", [match], step=step)
+    if match.passed:
+        return grade
+    grade.outcome, grade.reason = "fail", match.detail
+    if rule.agent.judge_alternatives:
+        grade.outcome, grade.reason = "ungraded", "waiting for judge"
+        _queue_judge(
+            plan,
+            record,
+            render_action(result.response or "", calls),
+            render_action(record.response, record.response_tool_calls),
+            NEXT_STEP_INSTRUCTIONS,
+        )
+    return grade
 
 
 @dataclass
@@ -260,6 +344,12 @@ def run_judges(
 JUDGE_PROMPT_OVERHEAD_TOKENS = 300
 
 
+def _may_be_judged(record: LogRecord, rule: TaskRule) -> bool:
+    if rule.agent.judge_alternatives and record.is_agent_step:
+        return True  # any step can differ and go to the judge
+    return rule.uses_judge and step_kind(record) != "tool_call"
+
+
 def judge_upper_bound(
     prices: PriceTable, judge: Candidate, config: GradingConfig, records: list[LogRecord]
 ) -> float | None:
@@ -267,14 +357,15 @@ def judge_upper_bound(
     calls each) and answers are about as long as the originals. None if the judge has no price."""
     total = 0.0
     for record in records:
-        if not config.rule_for(record.task_type).uses_judge:
+        if not _may_be_judged(record, config.rule_for(record.task_type)):
             continue
-        request_tokens = sum(estimate_tokens(m.content) for m in record.conversation())
+        request_tokens = estimate_tokens(render_request(record.conversation(), record.tools))
+        answer = render_action(record.response, record.response_tool_calls)
         per_call = candidate_cost(
             prices,
             judge,
             input_tokens=request_tokens
-            + 2 * estimate_tokens(record.response)
+            + 2 * estimate_tokens(answer)
             + JUDGE_PROMPT_OVERHEAD_TOKENS,
             output_tokens=JUDGE_OUTPUT_TOKENS,
         )

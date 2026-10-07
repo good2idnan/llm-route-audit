@@ -67,14 +67,85 @@ def test_provider_prefix_is_dropped_for_anthropic_models():
             {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {}}]}]},
             "images",
         ),
-        ({"messages": [{"role": "tool", "content": "42"}]}, "tool calls"),
-        ({"response": {"choices": [{"message": {"content": None}}]}}, "no response text"),
+        ({"messages": [{"role": "function", "content": "42"}]}, "unsupported message role"),
+        ({"response": {"choices": [{"message": {"content": None}}]}}, "no response logged"),
         ({"startTime": None}, "missing or invalid"),
     ],
 )
 def test_payloads_that_cannot_be_replayed_are_skipped(overrides, reason):
     with pytest.raises(Skip, match=reason):
         convert(payload(**overrides))
+
+
+WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city.",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+
+
+def test_agent_step_keeps_tool_calls_results_and_definitions():
+    record = convert(
+        payload(
+            messages=[
+                {"role": "developer", "content": "You plan trips."},
+                {"role": "user", "content": "Weather in Oslo and Rome?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Oslo"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "4 C, rain"},
+            ],
+            response={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_2",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city": "Rome"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            model_parameters={"tools": [WEATHER_TOOL], "temperature": 0},
+            metadata={"session_id": "trip-42"},
+        )
+    )
+    assert record.is_agent_step
+    assert [m.role for m in record.conversation()] == ["system", "user", "assistant", "tool"]
+    assert record.messages[2].tool_calls[0].arguments == {"city": "Oslo"}
+    assert record.messages[3].tool_call_id == "call_1"
+    assert record.response == ""
+    assert [(c.name, c.arguments) for c in record.response_tool_calls] == [
+        ("get_weather", {"city": "Rome"})
+    ]
+    assert record.tools[0].name == "get_weather"
+    assert record.tools[0].parameters["properties"] == {"city": {"type": "string"}}
+    assert record.session_id == "trip-42"
+
+
+def test_session_falls_back_to_the_trace_id():
+    assert convert(payload(trace_id="trace-9")).session_id == "trace-9"
+    assert convert(payload()).session_id is None
 
 
 def test_import_reads_files_and_folders(tmp_path):

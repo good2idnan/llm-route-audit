@@ -411,7 +411,7 @@ def replay(
             None if None in costs else sum(c for c in costs if c is not None), budget, yes
         )
         if batch:
-            jobs = [Job(c, r.conversation()) for c in candidate_list for r in picked]
+            jobs = [Job(c, r.conversation(), r.tools) for c in candidate_list for r in picked]
             max_spend = _collect_batches(
                 jobs, cache, price_table, cache_path, max_spend, wait_minutes, poll_seconds
             )

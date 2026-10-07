@@ -39,7 +39,7 @@ class MonitorPlan:
     not_checked: dict[str, str] = field(default_factory=dict)
 
     def shadow_jobs(self) -> list[Job]:
-        return [Job(c.reference, c.record.conversation()) for c in self.checks]
+        return [Job(c.reference, c.record.conversation(), c.record.tools) for c in self.checks]
 
     def estimate_cost(
         self, prices: PriceTable, config: GradingConfig, judge: Candidate
@@ -101,9 +101,14 @@ def grading_inputs(
             continue
         references.append(
             check.record.model_copy(
-                update={"response": outcome.completion.text, "model": check.reference.model}
+                update={
+                    "response": outcome.completion.text,
+                    "response_tool_calls": outcome.completion.tool_calls,
+                    "model": check.reference.model,
+                }
             )
         )
+        production_calls = check.record.response_tool_calls
         answers.append(
             ReplayResult(
                 record_id=check.record.id,
@@ -113,6 +118,7 @@ def grading_inputs(
                 provider=check.route.provider,
                 status="ok",
                 response=check.record.response,
+                tool_calls=[c.model_dump() for c in production_calls] if production_calls else None,
             )
         )
     return references, answers, failed

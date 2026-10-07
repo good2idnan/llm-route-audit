@@ -1,5 +1,6 @@
 """Traffic profile: what the logged requests cost today, by task type and by model."""
 
+import json
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -37,16 +38,32 @@ class Usage:
     estimated: bool
 
 
+def request_text(record: LogRecord) -> str:
+    """Everything a request sends, as text for token estimates: messages, their tool calls
+    and results, and the tool definitions."""
+    parts = []
+    for m in record.conversation():
+        parts.append(m.content)
+        if m.tool_calls:
+            parts.append(json.dumps([c.model_dump() for c in m.tool_calls]))
+    if record.tools:
+        parts.append(json.dumps([t.model_dump() for t in record.tools]))
+    return "".join(parts)
+
+
 def usage_of(record: LogRecord) -> Usage:
     """Token usage from the log, estimating any counts the log left out."""
     estimated = False
     input_tokens = record.input_tokens
     if input_tokens is None:
-        input_tokens = sum(estimate_tokens(m.content) for m in record.conversation())
+        input_tokens = estimate_tokens(request_text(record))
         estimated = True
     output_tokens = record.output_tokens
     if output_tokens is None:
-        output_tokens = estimate_tokens(record.response)
+        calls = record.response_tool_calls
+        output_tokens = estimate_tokens(
+            record.response + (json.dumps([c.arguments for c in calls]) if calls else "")
+        )
         estimated = True
     return Usage(
         input_tokens=input_tokens,
@@ -125,6 +142,8 @@ class TrafficProfile:
     estimated_records: int
     unlabelled_records: int
     unpriced_models: dict[str, int]
+    agent_steps: int = 0  # calls that involve tools
+    sessions: int = 0  # distinct session ids
 
     @property
     def span_days(self) -> float:
@@ -151,6 +170,8 @@ class TrafficProfile:
             "estimated_records": self.estimated_records,
             "unlabelled_records": self.unlabelled_records,
             "unpriced_models": self.unpriced_models,
+            "agent_steps": self.agent_steps,
+            "sessions": self.sessions,
         }
 
 
@@ -204,4 +225,6 @@ def build_profile(records: list[LogRecord], prices: PriceTable) -> TrafficProfil
         estimated_records=estimated,
         unlabelled_records=unlabelled,
         unpriced_models=unpriced,
+        agent_steps=sum(r.is_agent_step for r in records),
+        sessions=len({r.session_id for r in records if r.session_id}),
     )

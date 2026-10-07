@@ -12,13 +12,14 @@ from dataclasses import dataclass, field
 from llm_route_audit.cache import ResultCache, request_key
 from llm_route_audit.candidates import Candidate
 from llm_route_audit.providers.base import Completion, Provider, ProviderError
-from llm_route_audit.records import Message
+from llm_route_audit.records import Message, ToolDef
 
 
 @dataclass
 class Job:
     candidate: Candidate
     messages: list[Message]
+    tools: list[ToolDef] | None = None
 
 
 @dataclass
@@ -98,7 +99,7 @@ def execute(
     outcomes: dict[int, Outcome] = {}
     pending: list[tuple[int, Job, str]] = []
     for i, job in enumerate(jobs):
-        key = request_key(job.candidate, job.messages)
+        key = request_key(job.candidate, job.messages, job.tools)
         hit = cache.get(key)
         if hit is None:
             pending.append((i, job, key))
@@ -132,7 +133,11 @@ def execute(
             worst = limit
         start = time.perf_counter()
         try:
-            completion = providers[job.candidate.provider].complete(job.candidate, job.messages)
+            provider = providers[job.candidate.provider]
+            if job.tools:
+                completion = provider.complete(job.candidate, job.messages, tools=job.tools)
+            else:
+                completion = provider.complete(job.candidate, job.messages)
         except ProviderError as e:
             if guard is not None:
                 # Rejected requests (bad key, bad model) aren't billed; anything else might be.

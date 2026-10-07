@@ -63,9 +63,18 @@ def render_profile(profile: TrafficProfile, source: str) -> str:
     ]
     if profile.monthly_cost is not None:
         out.append(f"{INDENT}Monthly est.  {usd(profile.monthly_cost)} at this volume")
+    if profile.sessions:
+        out.append(
+            f"{INDENT}Sessions      {profile.sessions:,} "
+            f"({total.requests / profile.sessions:.1f} steps each, "
+            f"{profile.agent_steps:,} steps involve tools)"
+        )
+    elif profile.agent_steps:
+        out.append(f"{INDENT}Agent steps   {profile.agent_steps:,} involve tools (no session ids)")
     out += [
         f"{INDENT}Tokens        {total.input_tokens:,} input, {total.output_tokens:,} output, "
-        f"{total.cache_read_tokens:,} cache read",
+        f"{total.cache_read_tokens:,} cache read"
+        + (f", {total.cache_write_tokens:,} cache write" if total.cache_write_tokens else ""),
         f"{INDENT}Prices as of  {profile.prices_updated.isoformat()}",
         "",
         "By task type (most expensive first)",

@@ -6,7 +6,9 @@ message capture is turned on (the opt-in attributes gen_ai.input.messages,
 gen_ai.output.messages and gen_ai.system_instructions).
 
 Task types come from a span attribute, "task_type" by default. Set it in your application
-when you start the span.
+when you start the span. Agent steps keep their tool calls and tool results (tool_call and
+tool_call_response parts) and tool definitions (gen_ai.tool.definitions); the steps of one
+conversation (gen_ai.conversation.id, or else the trace) form one agent session.
 """
 
 import json
@@ -18,21 +20,25 @@ from typing import Any
 from pydantic import ValidationError
 
 from llm_route_audit.ingest.common import (
-    AGENT_TURN,
     CHAT_ROLES,
+    NO_RESPONSE,
     NOT_JSON,
+    UNSUPPORTED_ROLE,
     ImportResult,
     Skip,
     collect,
     is_unreadable,
     read_items,
     text_of,
+    tool_calls_of,
+    tool_defs,
+    tool_result,
 )
 from llm_route_audit.records import LogRecord
 
 DEFAULT_TASK_ATTRIBUTE = "task_type"
 STATUS_ERROR = 2
-TOOL_PARTS = {"tool_call", "tool_call_response"}
+SKIPPED_PARTS = {"reasoning"}  # the model's thinking: neither request nor answer
 
 
 def _value(value: dict[str, Any]) -> Any:
@@ -81,36 +87,58 @@ def _decoded(value: Any) -> Any:
     return value
 
 
-def _parts_text(parts: Any) -> str:
-    if isinstance(parts, list) and any(
-        isinstance(p, dict) and p.get("type") in TOOL_PARTS for p in parts
-    ):
-        raise Skip(AGENT_TURN)
-    return text_of(parts)
+def _part_type(part: Any) -> Any:
+    return part.get("type") if isinstance(part, dict) else None
 
 
-def _messages(attrs: dict[str, Any]) -> list[dict[str, str]]:
+def _converted(message: Any) -> list[dict[str, Any]]:
+    """One GenAI message as record messages: tool results become "tool" messages, tool
+    calls go on the assistant message."""
+    if not isinstance(message, dict) or message.get("role") not in CHAT_ROLES:
+        raise Skip(UNSUPPORTED_ROLE)
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return [{"role": message["role"], "content": text_of(parts)}]
+    out = [
+        tool_result(p.get("id"), p.get("response"))
+        for p in parts
+        if _part_type(p) == "tool_call_response"
+    ]
+    calls = tool_calls_of([p for p in parts if _part_type(p) == "tool_call"])
+    rest = [
+        p for p in parts if _part_type(p) not in SKIPPED_PARTS | {"tool_call", "tool_call_response"}
+    ]
+    if rest or calls or not out:
+        if calls and message["role"] != "assistant":
+            raise Skip("tool calls outside an assistant message")
+        converted: dict[str, Any] = {"role": message["role"], "content": text_of(rest)}
+        if calls:
+            converted["tool_calls"] = calls
+        out.append(converted)
+    return out
+
+
+def _messages(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     messages = []
     system = _decoded(attrs.get("gen_ai.system_instructions"))
     if system:
-        messages.append({"role": "system", "content": _parts_text(system)})
+        messages.append({"role": "system", "content": text_of(system)})
     inputs = _decoded(attrs.get("gen_ai.input.messages"))
     if not isinstance(inputs, list) or not inputs:
         raise Skip("no input messages recorded (turn on GenAI message capture)")
     for message in inputs:
-        if not isinstance(message, dict) or message.get("role") not in CHAT_ROLES:
-            raise Skip(AGENT_TURN)
-        messages.append({"role": message["role"], "content": _parts_text(message.get("parts"))})
+        messages += _converted(message)
     return messages
 
 
-def _output(attrs: dict[str, Any]) -> str:
+def _output(attrs: dict[str, Any]) -> tuple[str, list[dict[str, Any]] | None]:
     outputs = _decoded(attrs.get("gen_ai.output.messages"))
-    if isinstance(outputs, list) and outputs and isinstance(outputs[0], dict):
-        text = _parts_text(outputs[0].get("parts"))
-        if text:
-            return text
-    raise Skip("no output messages recorded (turn on GenAI message capture)")
+    if not isinstance(outputs, list) or not outputs or not isinstance(outputs[0], dict):
+        raise Skip("no output messages recorded (turn on GenAI message capture)")
+    reply = _converted({**outputs[0], "role": "assistant"})[-1]
+    if not reply["content"] and not reply.get("tool_calls"):
+        raise Skip(NO_RESPONSE)
+    return reply["content"], reply.get("tool_calls")
 
 
 def _time(nanos: Any) -> datetime:
@@ -129,7 +157,7 @@ def convert(span: Any, task_attribute: str = DEFAULT_TASK_ATTRIBUTE) -> LogRecor
         raise Skip("failed request")
 
     messages = _messages(attrs)
-    text = _output(attrs)
+    text, calls = _output(attrs)
     input_tokens = attrs.get("gen_ai.usage.input_tokens")
     cached = int(attrs.get("gen_ai.usage.cache_read.input_tokens") or 0)
     try:
@@ -143,6 +171,9 @@ def convert(span: Any, task_attribute: str = DEFAULT_TASK_ATTRIBUTE) -> LogRecor
                 "task_type": attrs.get(task_attribute) or None,
                 "messages": messages,
                 "response": text,
+                "response_tool_calls": calls,
+                "tools": tool_defs(_decoded(attrs.get("gen_ai.tool.definitions"))),
+                "session_id": attrs.get("gen_ai.conversation.id") or span.get("traceId"),
                 "input_tokens": max(0, input_tokens - cached) if input_tokens is not None else None,
                 "output_tokens": attrs.get("gen_ai.usage.output_tokens"),
                 "cache_read_tokens": cached or None,

@@ -48,7 +48,7 @@ class FakeBatches:
 
     def submit(self, candidate, items):
         batch_id = f"batch-{len(self.submitted) + 1}"
-        self.submitted[batch_id] = [key for key, _ in items]
+        self.submitted[batch_id] = [item[0] for item in items]
         return batch_id
 
     def check(self, batch):
@@ -202,7 +202,7 @@ def test_openrouter_batch_round_trip(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     client = OpenRouterBatches(base_url="https://or.test/api/v1")
-    batch_id = client.submit(ROUTER, [("k1", [Message(role="user", content="q")])])
+    batch_id = client.submit(ROUTER, [("k1", [Message(role="user", content="q")], None)])
     method, url, payload = calls[0]
     assert (method, url, batch_id) == ("POST", "https://or.test/api/v1/batches", "batch_9")
     assert list(payload)[:3] == ["endpoint", "model", "requests"]
@@ -246,7 +246,9 @@ def test_anthropic_batch_round_trip():
         ],
     )
     client = AnthropicBatches(client=SimpleNamespace(messages=SimpleNamespace(batches=batches)))
-    assert client.submit(CLAUDE, [("k1", [Message(role="user", content="q")])]) == "msgbatch_1"
+    assert (
+        client.submit(CLAUDE, [("k1", [Message(role="user", content="q")], None)]) == "msgbatch_1"
+    )
     assert created["requests"][0]["custom_id"] == "k1"
     assert created["requests"][0]["params"]["model"] == "claude-x"
 

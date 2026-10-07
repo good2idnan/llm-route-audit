@@ -5,7 +5,8 @@ Accepts observations from the Langfuse API (GET /api/public/v2/observations, or 
 a .json/.jsonl file or a folder of them. Only GENERATION observations become records.
 
 Task types come from trace tags such as "task:classify_ticket", or from each generation's
-name when `task_from_name` is set.
+name when `task_from_name` is set. Agent steps keep their tool calls, tool results and tool
+definitions, and the steps of one trace (or session) form one agent session.
 """
 
 from pathlib import Path
@@ -14,8 +15,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from llm_route_audit.ingest.common import (
-    AGENT_TURN,
     DEFAULT_TASK_TAG_PREFIX,
+    NO_RESPONSE,
     NOT_JSON,
     ImportResult,
     Skip,
@@ -23,8 +24,9 @@ from llm_route_audit.ingest.common import (
     collect,
     is_unreadable,
     read_items,
+    reply_of,
     tagged_task,
-    text_of,
+    tool_defs,
 )
 from llm_route_audit.records import LogRecord
 
@@ -32,30 +34,25 @@ from llm_route_audit.records import LogRecord
 CACHE_READ_KEYS = ("cache_read_input_tokens", "input_cached_tokens", "input_cache_read")
 
 
-def _input_messages(raw: Any) -> list[dict[str, str]]:
+def _input(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+    """(messages, tool definitions). Integrations log tools next to the messages."""
+    tools = None
     if isinstance(raw, dict) and isinstance(raw.get("messages"), list):
-        raw = raw["messages"]
+        tools = tool_defs(raw.get("tools"))
+        system = raw.get("system")  # Anthropic keeps the system prompt apart
+        raw = ([{"role": "system", "content": system}] if system else []) + raw["messages"]
     if isinstance(raw, str) and raw:
-        return [{"role": "user", "content": raw}]
-    return chat_messages(raw, "no input logged for this generation")
+        return [{"role": "user", "content": raw}], tools
+    return chat_messages(raw, "no input logged for this generation"), tools
 
 
-def _output_text(raw: Any) -> str:
-    if isinstance(raw, dict):
-        if raw.get("tool_calls"):
-            raise Skip(AGENT_TURN)
-        if raw.get("choices"):
-            raw = (raw["choices"][0] or {}).get("message") or {}
-            if raw.get("tool_calls"):
-                raise Skip(AGENT_TURN)
-        raw = raw.get("content")
-    if isinstance(raw, list):
-        if any(isinstance(p, dict) and p.get("type") in ("tool_use", "tool_call") for p in raw):
-            raise Skip(AGENT_TURN)
-    text = text_of(raw)
-    if not text:
-        raise Skip("no output logged for this generation")
-    return text
+def _output(raw: Any) -> tuple[str, list[dict[str, Any]] | None]:
+    if isinstance(raw, dict) and raw.get("choices"):
+        raw = (raw["choices"][0] or {}).get("message") or {}
+    text, calls = reply_of(raw)
+    if not text and not calls:
+        raise Skip(NO_RESPONSE)
+    return text, calls
 
 
 def _usage(observation: dict[str, Any]) -> tuple[int | None, int | None, int]:
@@ -85,8 +82,8 @@ def convert(
     if not model:
         raise Skip("no model name")
 
-    messages = _input_messages(observation.get("input"))
-    text = _output_text(observation.get("output"))
+    messages, tools = _input(observation.get("input"))
+    text, calls = _output(observation.get("output"))
     input_tokens, output_tokens, cached = _usage(observation)
     task = (
         observation.get("name")
@@ -102,6 +99,9 @@ def convert(
                 "task_type": task or None,
                 "messages": messages,
                 "response": text,
+                "response_tool_calls": calls,
+                "tools": tools,
+                "session_id": observation.get("sessionId") or observation.get("traceId"),
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "cache_read_tokens": cached or None,
