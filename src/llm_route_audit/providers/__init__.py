@@ -13,6 +13,10 @@ def get_provider(name: str) -> Provider:
         from llm_route_audit.providers.ollama import OllamaProvider
 
         return OllamaProvider()
+    if name == "openai":
+        from llm_route_audit.providers.openai import OpenAIProvider
+
+        return OpenAIProvider()
     if name == "openrouter":
         from llm_route_audit.providers.openrouter import OpenRouterProvider
 

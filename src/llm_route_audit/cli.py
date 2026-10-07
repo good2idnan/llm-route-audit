@@ -133,23 +133,36 @@ def _load_records(path: Path) -> list[LogRecord]:
     return result.records
 
 
+def _price_id(candidate: Candidate) -> str | None:
+    """The id OpenRouter's public price list uses for a candidate, if it is listed there."""
+    if candidate.provider == "openrouter":
+        return candidate.api_model
+    if candidate.provider == "openai" and not candidate.base_url:
+        return f"openai/{candidate.api_model}"  # OpenAI's own models, at OpenAI's prices
+    return None
+
+
 def _prices(path: Path | None, candidates: list[Candidate] = ()) -> PriceTable:
-    """Load prices, then look up any OpenRouter models the table doesn't list."""
+    """Load prices, then look up OpenRouter and OpenAI models the table doesn't list."""
     try:
         table = load_prices(path)
     except (yaml.YAMLError, ValidationError) as e:
         typer.echo(f"Could not read prices file {path}: {e}", err=True)
         raise typer.Exit(code=1) from None
-    missing = [c for c in candidates if c.provider == "openrouter" and c.model not in table.models]
+    missing = {
+        c.model: price_id
+        for c in candidates
+        if c.model not in table.models and (price_id := _price_id(c))
+    }
     if missing:
         try:
-            found = fetch_openrouter_prices([c.api_model for c in missing])
+            found = fetch_openrouter_prices(sorted(set(missing.values())))
         except (OSError, ValueError, KeyError) as e:
-            typer.echo(f"Could not fetch OpenRouter prices: {e}", err=True)
+            typer.echo(f"Could not fetch model prices: {e}", err=True)
             found = {}
-        for c in missing:
-            if c.api_model in found:
-                table.models[c.model] = found[c.api_model]
+        for model, price_id in missing.items():
+            if price_id in found:
+                table.models[model] = found[price_id]
     return table
 
 

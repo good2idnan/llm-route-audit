@@ -37,6 +37,8 @@ def request_key(candidate: Candidate, messages: list[Message]) -> str:
         "max_tokens": candidate.max_tokens,
         "messages": [[m.role, m.content] for m in messages],
     }
+    if candidate.base_url:  # a different server can answer differently
+        payload["base_url"] = candidate.base_url
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 

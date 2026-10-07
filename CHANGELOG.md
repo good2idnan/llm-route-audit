@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- OpenAI provider: candidates named `openai/<model>`, with `reasoning_effort`, refusal and truncation detection, and automatic price lookup.
+- Any OpenAI-compatible server through `base_url` and `api_key_env` (Groq, Together, vLLM, LM Studio, Ollama's OpenAI API). Servers on your own machine count as free.
+- Effort levels `none` and `minimal` for models that support them.
+
 ## 0.1.1 (2026-10-07)
 
 - Renamed everything to match the project name. The command is now `llm-route-audit` (was `routeaudit`), the Python package is `llm_route_audit`, and results go to `.llm-route-audit/`.

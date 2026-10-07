@@ -1,0 +1,18 @@
+# OpenAI models (key: OPENAI_API_KEY in .env). Prices are looked up automatically.
+# effort: none | minimal | low | medium | high | xhigh | max, where the model supports it.
+candidates:
+  - model: openai/gpt-6-luna
+    max_tokens: 2000
+  - model: openai/gpt-6-sol
+    effort: low
+    max_tokens: 4000
+
+# Any other OpenAI-compatible server works too. For example, a model served locally
+# by LM Studio or vLLM (free), or a hosted one such as Groq:
+#  - model: qwen3-8b
+#    provider: openai
+#    base_url: http://localhost:1234/v1
+#  - model: llama-4-scout
+#    provider: openai
+#    base_url: https://api.groq.com/openai/v1
+#    api_key_env: GROQ_API_KEY

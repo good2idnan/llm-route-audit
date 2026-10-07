@@ -25,7 +25,7 @@ def candidate_cost(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
 ) -> float | None:
-    """Cost of one request on a candidate. Unpriced local Ollama models count as free."""
+    """Cost of one request on a candidate. Unpriced models running locally count as free."""
     try:
         return prices.cost(
             candidate.model,
@@ -35,7 +35,7 @@ def candidate_cost(
             cache_write_tokens=cache_write_tokens,
         )
     except UnknownModelError:
-        return 0.0 if candidate.provider == "ollama" else None
+        return 0.0 if candidate.runs_locally else None
 
 
 def completion_cost(

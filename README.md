@@ -64,7 +64,7 @@ your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ repo
 | `llm-route-audit import` | Convert LiteLLM, Langfuse or OpenTelemetry logs into llm-route-audit's log format |
 | `llm-route-audit validate` | Check a log file |
 | `llm-route-audit analyze` | Show what your traffic costs today, by task type and model |
-| `llm-route-audit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenRouter, Ollama) |
+| `llm-route-audit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenAI, OpenRouter, Ollama, any OpenAI-compatible server) |
 | `llm-route-audit grade` | Compare every answer with the original: exact checks, then an AI judge |
 | `llm-route-audit report` | Recommend a model per task type, with cost and quality for each strategy |
 | `llm-route-audit export` | Write the policy as YAML or as a LiteLLM proxy config |
@@ -159,10 +159,13 @@ Name each candidate (and the judge) after where it runs, and put the key in a `.
 | Provider | Model name | Key in `.env` |
 |---|---|---|
 | Anthropic | `claude-haiku-4-5` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai/gpt-6-luna` | `OPENAI_API_KEY` |
 | [OpenRouter](https://openrouter.ai) | `openrouter/anthropic/claude-haiku-4.5` | `OPENROUTER_API_KEY` |
 | [Ollama](https://ollama.com) (local, free) | `ollama/llama3.2` | none |
 
-Effort levels (`low` to `max`) go next to the model in the candidates file. OpenRouter prices are looked up automatically, and the real cost of each call is recorded.
+Any other server that speaks OpenAI's API, such as Groq, Together, vLLM or LM Studio, works through `base_url` (and `api_key_env` if its key has another name). See [`examples/candidates-openai.yaml`](examples/candidates-openai.yaml). Models on your own machine count as free.
+
+Effort levels (`none` to `max`, where a model supports them) go next to the model in the candidates file. Prices for OpenAI and OpenRouter models are looked up automatically, and OpenRouter's real cost for each call is recorded.
 
 Three spending controls work on both `replay` and `grade`:
 
