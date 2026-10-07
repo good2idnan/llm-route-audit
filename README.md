@@ -4,6 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+[![PyPI](https://img.shields.io/pypi/v/llm-route-audit.svg)](https://pypi.org/project/llm-route-audit/)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](CHANGELOG.md)
 
 Model routers send easy prompts to cheap models and hard prompts to strong ones. Whether that works for *your* workload is usually a guess. llm-route-audit replays a sample of your real requests on cheaper models, grades every answer against the original, and tells you, task by task, where a cheaper model is good enough. You get a report and a routing policy for the gateway you already run.
@@ -11,6 +12,14 @@ Model routers send easy prompts to cheap models and hard prompts to strong ones.
 ![Per-task routing compared with using one cheaper model everywhere](https://raw.githubusercontent.com/good2idnan/llm-route-audit/main/docs/images/demo-chart.svg)
 
 <sub>Demo run on 5 requests: using Haiku everywhere cut cost to 19% but only 58% of answers passed. Per-task routing kept every answer passing at 26% of the cost. The sample is far too small to trust, so run it on your own logs.</sub>
+
+## Install
+
+```bash
+pip install llm-route-audit
+```
+
+Requires Python 3.11+. The command-line tool is called `routeaudit`; run `routeaudit --help` to see every command.
 
 ## Try it in one minute
 
@@ -24,7 +33,7 @@ uv run routeaudit report examples/sample_logs.jsonl \
   --replay examples/demo/replay.jsonl --grades examples/demo/grades.jsonl --min-samples 1
 ```
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). The command-line tool is called `routeaudit`.
+The commands below use `uv run` from a clone of the repository. With `pip install`, drop the `uv run` prefix.
 
 ## Why
 
