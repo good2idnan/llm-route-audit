@@ -1,9 +1,9 @@
 """The log record format that every routeaudit command reads."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Role = Literal["system", "user", "assistant"]
 
@@ -39,6 +39,12 @@ class LogRecord(BaseModel):
     task_type: str | None = None
     outcome: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("timestamp")
+    @classmethod
+    def _assume_utc(cls, value: datetime) -> datetime:
+        """Timestamps without a timezone are treated as UTC, so all records compare cleanly."""
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
     @model_validator(mode="after")
     def _has_input(self) -> "LogRecord":

@@ -18,7 +18,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+    "anthropic>=1.11.0",
     "pydantic>=2.7",
+    "python-dotenv>=1.2.4",
     "pyyaml>=6.0",
     "typer>=0.12",
 ]

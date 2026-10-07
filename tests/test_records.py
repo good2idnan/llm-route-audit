@@ -29,6 +29,11 @@ def test_negative_token_count_is_rejected():
         LogRecord.model_validate({**BASE, "prompt": "x", "output_tokens": -1})
 
 
+def test_timestamp_without_timezone_is_treated_as_utc():
+    record = LogRecord.model_validate({**BASE, "timestamp": "2026-10-01T09:00:00", "prompt": "x"})
+    assert record.timestamp.utcoffset().total_seconds() == 0
+
+
 def test_unknown_fields_are_ignored():
     record = LogRecord.model_validate({**BASE, "prompt": "x", "user_id": "u-42"})
     assert not hasattr(record, "user_id")
