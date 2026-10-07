@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from llm_route_audit import __version__
 from llm_route_audit.analyze import UNLABELLED, build_profile
+from llm_route_audit.batching import BATCH_DISCOUNT, BATCH_PROVIDERS, batch_client_for, run_batches
 from llm_route_audit.cache import ResultCache
 from llm_route_audit.candidates import Candidate, Effort, load_candidates
 from llm_route_audit.checkmodel import (
@@ -85,7 +86,7 @@ from llm_route_audit.report import (
     policy_yaml,
 )
 from llm_route_audit.report_view import render_html, render_text
-from llm_route_audit.runner import execute
+from llm_route_audit.runner import Job, execute
 from llm_route_audit.sampling import stratified_sample
 
 app = typer.Typer(
@@ -210,6 +211,67 @@ def _progress(noun: str) -> Callable[[int, int], None]:
     return report
 
 
+BatchOpt = Annotated[
+    bool,
+    typer.Option(
+        "--batch",
+        help="Use the provider's batch API (Anthropic, OpenRouter): about half price, answers "
+        "within 24 hours. Run the command again to collect answers still in progress.",
+    ),
+]
+WaitOpt = Annotated[
+    float, typer.Option(min=0, help="Batch mode: minutes to wait for answers before stopping.")
+]
+PollOpt = Annotated[float, typer.Option(min=5, help="Batch mode: seconds between progress checks.")]
+
+
+def _batch_discount(provider: str | None, batch: bool) -> float:
+    return BATCH_DISCOUNT if batch and provider in BATCH_PROVIDERS else 1.0
+
+
+def _collect_batches(
+    jobs: list[Job],
+    cache: ResultCache,
+    prices: PriceTable,
+    cache_path: Path,
+    max_spend: float | None,
+    wait_minutes: float,
+    poll_seconds: float,
+) -> float | None:
+    """Run the batch step. Returns the spending limit left for anything that runs live, or
+    exits when answers are still in progress."""
+    progress = run_batches(
+        jobs,
+        cache,
+        prices,
+        cache_path.parent / "batches.json",
+        batch_client_for,
+        max_spend=max_spend,
+        wait_seconds=wait_minutes * 60,
+        poll_seconds=poll_seconds,
+        on_status=lambda line: typer.echo(f"{INDENT}{line}", err=True),
+    )
+    typer.echo(
+        f"Batch: sent {progress.submitted}, collected {progress.collected} "
+        f"(cost {usd(progress.spent)}), still in progress {progress.pending}."
+    )
+    if progress.held_back:
+        typer.echo(f"{INDENT}{progress.held_back} requests not sent, to stay under --max-spend.")
+    if progress.live:
+        typer.echo(
+            f"{INDENT}{progress.live} requests use a provider without a batch API; they run now."
+        )
+    for reason, n in progress.failed.most_common(3):
+        typer.echo(f"{INDENT}{n} x {reason} (these will run live)")
+    if progress.pending:
+        typer.echo(
+            "Answers are still being prepared. Run the same command again later to collect "
+            "them; nothing is sent or paid for twice."
+        )
+        raise typer.Exit(code=0)
+    return None if max_spend is None else max(0.0, max_spend - progress.spent)
+
+
 def _version(value: bool) -> None:
     if value:
         typer.echo(f"llm-route-audit {__version__}")
@@ -301,6 +363,9 @@ def replay(
         bool, typer.Option("--dry-run", help="Show the plan and cost estimate, then stop.")
     ] = False,
     max_spend: MaxSpendOpt = None,
+    batch: BatchOpt = False,
+    wait_minutes: WaitOpt = 60,
+    poll_seconds: PollOpt = 30,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
     ] = False,
@@ -313,7 +378,14 @@ def replay(
     cache = ResultCache(cache_path)
     try:
         estimates = estimate(picked, candidate_list, price_table, cache)
+        for e in estimates:
+            if e.cost is not None:
+                e.cost *= _batch_discount(e.candidate.provider, batch)
         typer.echo(render_estimate(picked, estimates))
+        if batch:
+            typer.echo(
+                f"{INDENT}Batch mode: Anthropic and OpenRouter candidates at about half price."
+            )
         typer.echo("")
         if dry_run:
             typer.echo("Dry run: nothing was sent.")
@@ -323,6 +395,11 @@ def replay(
         _confirm_spend(
             None if None in costs else sum(c for c in costs if c is not None), budget, yes
         )
+        if batch:
+            jobs = [Job(c, r.conversation()) for c in candidate_list for r in picked]
+            max_spend = _collect_batches(
+                jobs, cache, price_table, cache_path, max_spend, wait_minutes, poll_seconds
+            )
         run = run_replay(
             picked,
             candidate_list,
@@ -384,6 +461,9 @@ def grade(
         bool, typer.Option("--dry-run", help="Run the free checks, show the plan, then stop.")
     ] = False,
     max_spend: MaxSpendOpt = None,
+    batch: BatchOpt = False,
+    wait_minutes: WaitOpt = 60,
+    poll_seconds: PollOpt = 30,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
     ] = False,
@@ -414,13 +494,22 @@ def grade(
     cache = ResultCache(cache_path)
     try:
         cost, calls = plan.estimate_cost(price_table, cache)
+        if cost is not None:
+            cost *= _batch_discount(plan.judge.provider, batch)
         typer.echo(render_grade_plan(plan, cost, calls))
+        if batch:
+            typer.echo(f"{INDENT}Batch mode: judge calls at about half price.")
         typer.echo("")
         if dry_run:
             typer.echo("Dry run: no judge calls were made.")
             return
         if calls:
             _confirm_spend(cost, budget, yes)
+        if batch and calls:
+            jobs = [job for _, a, b in plan.judge_pairs for job in (a, b)]
+            max_spend = _collect_batches(
+                jobs, cache, price_table, cache_path, max_spend, wait_minutes, poll_seconds
+            )
         run = run_judges(
             plan,
             cache,

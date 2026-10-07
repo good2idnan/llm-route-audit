@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `--batch` for `replay` and `grade`: half-price batch APIs from Anthropic and OpenRouter. It sends what the run still needs, waits (`--wait-minutes`, `--poll-seconds`), and saves answers to the cache. Unfinished batches are tracked in `.llm-route-audit/batches.json`, and running the command again collects them without resending. `--max-spend` is checked before anything is sent.
+
 ## 0.1.2 (2026-10-07)
 
 - `llm-route-audit label`: give requests a task type. `--by system-prompt` (default) groups requests that share system instructions, with no extra install. `--by laya` sorts requests into task types you describe with the open laya model, installed with `pip install "llm-route-audit[laya]"`.

@@ -32,7 +32,7 @@ def _error_body(e: urllib.error.HTTPError) -> tuple[str, Any]:
 
 def post_json(
     url: str,
-    payload: dict[str, Any],
+    payload: dict[str, Any] | None,
     headers: dict[str, str],
     *,
     timeout: float = 600,
@@ -41,11 +41,13 @@ def post_json(
     should_retry: Callable[[int, Any], bool] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Any:
-    """POST JSON and return the decoded reply. Retries busy and server errors with backoff."""
+    """POST JSON (or GET, when `payload` is None) and return the decoded reply. Retries busy
+    and server errors with backoff."""
     request = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", **headers},
+        method="GET" if payload is None else "POST",
     )
     for attempt in range(max_retries + 1):
         try:
