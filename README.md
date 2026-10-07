@@ -91,10 +91,6 @@ One JSON object per line:
 | `cache_read_tokens`, `cache_write_tokens` | No | For cache-aware pricing |
 | `latency_ms`, `task_type`, `outcome`, `metadata` | No | Unknown fields are ignored |
 
-## Pricing
-
-Default prices are in [`src/routeaudit/data/prices.yaml`](src/routeaudit/data/prices.yaml), in USD per 1M tokens. Provider prices change, so check them before relying on any numbers.
-
 ## Development
 
 ```bash
