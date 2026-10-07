@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-07)
 
 Agent audits: tool-using agents are audited step by step.
 
