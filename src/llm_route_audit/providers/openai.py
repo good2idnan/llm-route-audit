@@ -58,6 +58,7 @@ def parse_response(data: dict[str, Any]) -> Completion:
         cache_read_tokens=cached,
         status=status,
         tool_calls=parse_openai_tool_calls(message.get("tool_calls")),
+        served_model=data.get("model"),
     )
 
 

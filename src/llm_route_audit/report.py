@@ -23,12 +23,15 @@ from llm_route_audit.agent_report import SessionTypeReport, session_report
 from llm_route_audit.analyze import UNLABELLED, build_profile, usage_of
 from llm_route_audit.costs import PriceTable, UnknownModelError
 from llm_route_audit.grading.grade import ORIGINAL
+from llm_route_audit.policy import litellm_model
 from llm_route_audit.records import LogRecord
 from llm_route_audit.replay import ReplayResult
+from llm_route_audit.router_report import RouterAudit, audit_routers
 from llm_route_audit.sampling import session_type, sessions
 
 DEFAULT_TARGET = 0.95  # keep at least 95% of the original's pass rate
 DEFAULT_MIN_SAMPLES = 10
+ROUTER_STRATEGY = "Router {label}"
 BOOTSTRAP_ROUNDS = 1000
 
 
@@ -77,6 +80,7 @@ class OptionStats:
     original_cost: float = 0.0  # what the same requests cost as logged
     # (cost, original cost) per request, for the cost ratio's range
     pairs: list[tuple[float, float]] = field(default_factory=list, repr=False)
+    router: bool = False  # a router candidate, which picks a model per request
 
     @property
     def pass_rate(self) -> float | None:
@@ -101,6 +105,7 @@ class OptionStats:
             "model": self.model,
             "effort": self.effort,
             "provider": self.provider,
+            "router": self.router,
             "graded": self.graded,
             "passed": self.passed,
             "pass_rate": self.pass_rate,
@@ -145,6 +150,7 @@ class Report:
     judged: int = 0  # answers with a verdict from both judge orders
     judge_agreed: int = 0  # ... where both orders gave the same verdict
     sessions: list[SessionTypeReport] = field(default_factory=list)  # agent logs only
+    routers: list[RouterAudit] = field(default_factory=list)  # router candidates only
     generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -172,6 +178,7 @@ class Report:
             "judged": self.judged,
             "judge_agreed": self.judge_agreed,
             "sessions": [s.to_dict() for s in self.sessions],
+            "routers": [r.to_dict() for r in self.routers],
             "strategies": [s.__dict__ for s in self.strategies],
             "tasks": [
                 {
@@ -301,7 +308,8 @@ def build_report(
         task = record.task_type or UNLABELLED
         label = result.label
         option = options[task].setdefault(
-            label, OptionStats(label, result.model, result.effort, result.provider)
+            label,
+            OptionStats(label, result.model, result.effort, result.provider, router=result.router),
         )
         cost = routed_cost(prices, record, result)
         original_cost = _logged_cost(prices, record)
@@ -343,9 +351,10 @@ def build_report(
             )
         )
 
+    strategies = _strategies(tasks)
     return Report(
         tasks=tasks,
-        strategies=_strategies(tasks),
+        strategies=strategies,
         target=target,
         min_samples=min_samples,
         total_logged_cost=profile.total.cost,
@@ -358,6 +367,13 @@ def build_report(
             grades,
             lambda record, result: routed_cost(prices, record, result),
             lambda record: _logged_cost(prices, record),
+        ),
+        routers=audit_routers(
+            results,
+            outcomes,
+            {r.id: r.task_type or UNLABELLED for r in records},
+            strategies,
+            ROUTER_STRATEGY,
         ),
     )
 
@@ -387,10 +403,13 @@ def _strategies(tasks: list[TaskReport]) -> list[Strategy]:
     current = _weighted(tasks, lambda t: t.original)
     current.name = "Current setup (as logged)"
     labels = list(dict.fromkeys(o.label for t in tasks for o in t.options))
+    routers = {o.label for t in tasks for o in t.options if o.router}
     always = []
     for label in labels:
         strategy = _weighted(tasks, lambda t, label=label: _find(t.options, label))
-        strategy.name = f"Always {label}"
+        strategy.name = (
+            ROUTER_STRATEGY.format(label=label) if label in routers else f"Always {label}"
+        )
         always.append(strategy)
     policy = _weighted(tasks, lambda t: t.choice)
     policy.name = "Per-task policy"
@@ -437,17 +456,6 @@ def policy_yaml(report: Report) -> str:
 
 
 PROVIDER_KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
-
-
-def litellm_model(model: str, provider: str | None) -> tuple[str, str | None]:
-    """LiteLLM's name for a model, and the provider it implies."""
-    if provider == "anthropic" or (provider is None and model.startswith("claude-")):
-        return f"anthropic/{model}", "anthropic"
-    if model.startswith("openrouter/"):
-        return model, "openrouter"
-    if model.startswith("ollama/"):
-        return model, "ollama"
-    return model, provider
 
 
 def policy_litellm(report: Report) -> str:

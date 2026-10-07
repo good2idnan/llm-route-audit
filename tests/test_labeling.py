@@ -1,5 +1,7 @@
+import io
 import json
 import sys
+import urllib.error
 from collections import defaultdict
 from pathlib import Path
 
@@ -9,7 +11,9 @@ from typer.testing import CliRunner
 from llm_route_audit.cli import app
 from llm_route_audit.ingest.jsonl import load_jsonl
 from llm_route_audit.labeling import (
+    JevLabeler,
     Label,
+    LabelerUnavailable,
     LayaLabeler,
     LayaUnavailable,
     apply_labels,
@@ -147,3 +151,107 @@ def test_label_command(tmp_path, monkeypatch):
         app, ["label", str(logs), "--out", str(out), "--by", "laya", "--tasks", str(tasks)]
     )
     assert missing.exit_code == 1 and "pip install" in missing.output
+
+
+# --- Jev (TypeSafe's hosted decision model) -------------------------------------------------
+
+
+class FakeResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def jev_reply(choice="billing", confidence=0.9):
+    return {
+        "model": "jev-1.13.0",
+        "answers": {
+            "task": {
+                "type": "choice",
+                "choice": choice,
+                "probabilities": {choice: confidence},
+                "confidence": confidence,
+            }
+        },
+        "usage": {"input_tokens": 120, "output_tokens": 4},
+    }
+
+
+def test_jev_client_sends_typed_questions(monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test")
+    monkeypatch.delenv("TYPESAFE_API_BASE", raising=False)
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["auth"] = request.get_header("Authorization")
+        seen["body"] = json.loads(request.data)
+        return FakeResponse(json.dumps(jev_reply()).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    labeler = JevLabeler(TASKS)
+    label = labeler.label(record("1", "Sort tickets.", "Charged twice"))
+    assert (label.task, label.confidence) == ("billing", 0.9)
+    assert seen["url"] == "https://api.typesafe.ai/v1/systemone"
+    assert seen["auth"] == "Bearer ts-test"
+    assert seen["body"]["model"] == "jev-latest"
+    assert seen["body"]["questions"]["task"]["type"] == "choice"
+    assert "other" in seen["body"]["questions"]["task"]["criteria"]
+    assert seen["body"]["state"].startswith("Instructions: Sort tickets.")
+    assert 0 < labeler.cost([record("1", "Sort tickets.", "Charged twice")]) < 0.0001
+
+
+def test_jev_needs_a_key_and_a_working_one(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    with pytest.raises(LabelerUnavailable, match="TYPESAFE_API_KEY"):
+        JevLabeler(TASKS)
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "bad")
+
+    def reject(request, timeout):
+        body = io.BytesIO(json.dumps({"error": {"message": "invalid key"}}).encode())
+        raise urllib.error.HTTPError("u", 401, "unauthorized", {}, body)
+
+    monkeypatch.setattr("urllib.request.urlopen", reject)
+    with pytest.raises(LabelerUnavailable, match="invalid key"):
+        JevLabeler(TASKS).label(record("1"))
+
+
+def test_label_command_with_jev(tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test")
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        state = json.loads(request.data)["state"]
+        calls.append(state)
+        if "broken" in state:
+            body = io.BytesIO(json.dumps({"error": {"message": "bad state"}}).encode())
+            raise urllib.error.HTTPError("u", 422, "unprocessable", {}, body)
+        choice = "billing" if "charged" in state.lower() else "other"
+        return FakeResponse(json.dumps(jev_reply(choice)).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    logs = tmp_path / "logs.jsonl"
+    rows = [
+        record("1", user="Charged twice"),
+        record("2", user="Hello"),
+        record("3", user="broken"),
+    ]
+    logs.write_text("".join(r.model_dump_json() + "\n" for r in rows), "utf-8")
+    tasks = tmp_path / "tasks.yaml"
+    tasks.write_text("tasks:\n  billing: payments and refunds\n", "utf-8")
+    out = tmp_path / "labelled.jsonl"
+    args = ["label", str(logs), "--out", str(out), "--by", "jev", "--tasks", str(tasks)]
+
+    declined = CliRunner().invoke(app, args, input="n\n")
+    assert declined.exit_code != 0 and "sent to TypeSafe" in declined.output
+    assert calls == []  # nothing sent before you agree
+
+    result = CliRunner().invoke(app, [*args, "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Estimated cost" in result.output
+    assert "1 requests could not be labelled" in result.output
+    labelled = {r.id: r.task_type for r in load_jsonl(out).records}
+    assert labelled == {"1": "billing", "2": None, "3": None}

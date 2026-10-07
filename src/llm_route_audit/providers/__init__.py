@@ -9,6 +9,10 @@ def get_provider(name: str) -> Provider:
         from llm_route_audit.providers.anthropic import AnthropicProvider
 
         return AnthropicProvider()
+    if name == "gemini":
+        from llm_route_audit.providers.gemini import GeminiProvider
+
+        return GeminiProvider()
     if name == "ollama":
         from llm_route_audit.providers.ollama import OllamaProvider
 

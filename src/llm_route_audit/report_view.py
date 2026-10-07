@@ -5,6 +5,7 @@ import html
 from llm_route_audit.display import INDENT, pct, table, usd
 from llm_route_audit.grading.grade import ORIGINAL
 from llm_route_audit.report import OptionStats, Report, Strategy
+from llm_route_audit.router_report import RouterAudit
 
 
 def _rate(option: OptionStats) -> str:
@@ -97,6 +98,37 @@ SESSION_HEADERS = [
 ]
 
 
+ROUTERS_INTRO = (
+    "Each sampled request went through the router, which picked the model. "
+    "Its answers were graded like any other option."
+)
+ROUTER_HEADERS = ["Task", "Model it picked", "Share", "Passed"]
+
+
+def _router_rows(audit: RouterAudit) -> list[list[str]]:
+    per_task: dict[str, int] = {}
+    for p in audit.picks:
+        per_task[p.task] = per_task.get(p.task, 0) + p.answers
+    return [
+        [p.task, p.model, pct(p.answers / per_task[p.task]), _share(p.passed, p.graded)]
+        for p in audit.picks
+    ]
+
+
+def _router_notes(report: Report, audit: RouterAudit) -> list[str]:
+    r = audit.result
+    notes = [
+        f"{audit.label}: quality {_ratio(r.quality)}, cost {_ratio(r.cost_ratio)} of today",
+        audit.verdict,
+    ]
+    if any(s.name == report.policy.name for s in audit.beaten_by):
+        notes.append(
+            "The per-task policy was chosen on these same answers, so its numbers are a "
+            "little optimistic. Confirm with more requests before relying on the gap."
+        )
+    return notes
+
+
 def _money(value: float | None) -> str:
     return "-" if value is None else f"${value:.4f}"
 
@@ -148,6 +180,10 @@ def render_text(report: Report, html_path: str | None = None) -> str:
             for s in report.strategies
         ],
     )
+    for audit in report.routers:
+        out += ["", "Router audit", f"{INDENT}{ROUTERS_INTRO}"]
+        out += [f"{INDENT}{line}" for line in _router_notes(report, audit)]
+        out += table(ROUTER_HEADERS, _router_rows(audit), text_columns=2)
     out += ["", _savings_line(report)]
     if report.judged:
         out.append(_agreement_line(report))
@@ -337,6 +373,18 @@ def render_html(report: Report, source: str) -> str:
         )
     out.append("</table></div></section>")
 
+    for audit in report.routers:
+        out.append(f"<section><h2>Router audit: {_e(audit.label)}</h2>")
+        out.append(f"<p class='sub'>{_e(ROUTERS_INTRO)}</p>")
+        out += [f"<p>{_e(line)}</p>" for line in _router_notes(report, audit)]
+        out.append("<div class='panel'><table><tr>")
+        out.append("".join(f"<th>{_e(h)}</th>" for h in ROUTER_HEADERS) + "</tr>")
+        for row in _router_rows(audit):
+            out.append(
+                f"<tr><td>{_e(row[0])}</td><td>{_e(row[1])}</td>"
+                f"<td class='num'>{_e(row[2])}</td><td class='num'>{_e(row[3])}</td></tr>"
+            )
+        out.append("</table></div></section>")
     out.append("<section><h2>Details</h2><div class='panel'><table>")
     out.append(
         "<tr><th>Task</th><th>Option</th><th>Graded</th><th>Pass</th><th>95% range</th>"

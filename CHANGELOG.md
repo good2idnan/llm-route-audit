@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 (2026-10-07)
+
+- **Router audits.** Candidates with `router: true` (OpenRouter's Auto Router, TypeSafe's Jev Router, a LiteLLM auto-router) are replayed like any model. Every answer records the model the router picked, and the report adds a router audit: its picks per task, how they graded, and whether a simpler strategy is as good for less. `price_as` prices estimates and `--max-spend` for routers, which have no fixed price. Every provider now records the model that actually answered.
+- **Runtime router** (`llm_route_audit.runtime.Router`): applies an exported policy inside your app. It can send the request itself (with one retry on the replaced model), or return the arguments for the Anthropic SDK, the OpenAI SDK or LiteLLM. It can also log every call in the audit format and record user feedback.
+- **`outcomes`**: learns from real-world feedback (each record's `outcome`, or a `record_id,outcome` file). It compares good-outcome rates on each switched route with the model it replaced and marks routes OK, WAIT, WATCH or REVERT. `--out` writes a policy with REVERT routes sent back, and the command exits with code 2 when a route should be reverted.
+- **`rerun`**: re-runs whole agent sessions on cheaper models. Tool results come from the log, or from your own tools for new calls (`--tool-handler FILE.py:FUNCTION`, or `--mcp` with a command or URL, via the optional `mcp` extra). It reports sessions finished, final answers passed, original tool calls matched and cost per session.
+- **Gemini provider**: `gemini/<model>`, with thinking levels, tool calls, refusal and truncation detection, and automatic prices.
+- **`label --by jev`**: sorts requests into your task types with TypeSafe's hosted Jev model, after showing the cost and asking first.
+
 ## 0.2.1 (2026-10-07)
 
 - New check `json_schema`: the answer must be JSON that fits a JSON Schema, inline or from a file next to the grading file. Errors name the first problem, such as `$.priority: 'critical' is not one of [...]`.

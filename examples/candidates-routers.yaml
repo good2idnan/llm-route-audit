@@ -1,0 +1,26 @@
+# Audit routers: does a router that picks a model per request beat simpler strategies?
+#
+# A router is replayed like any other candidate. `router: true` records the model it picked
+# for every request, and the report shows its picks per task and whether always using one
+# model, or the per-task policy, does better.
+#
+# Routers have no fixed price. `price_as` names the model used for cost estimates and the
+# --max-spend limit (pick the most expensive model the router may choose). Real costs come
+# from what the provider reports, or from the price of the model the router picked.
+candidates:
+  - model: openrouter/openrouter/auto          # OpenRouter's Auto Router
+    router: true
+    price_as: openrouter/anthropic/claude-opus-5.5
+  - model: openrouter/typesafe/jev-router      # TypeSafe's Jev Router
+    router: true
+    price_as: openrouter/anthropic/claude-opus-5.5
+  # Simple strategies to compare against:
+  - model: openrouter/anthropic/claude-haiku-4.5
+  - model: openrouter/anthropic/claude-sonnet-5.5
+
+  # A LiteLLM proxy with an auto-router is audited the same way:
+  # - model: auto_router1
+  #   base_url: http://localhost:4000/v1
+  #   api_key_env: LITELLM_API_KEY
+  #   router: true
+  #   price_as: claude-opus-5-5

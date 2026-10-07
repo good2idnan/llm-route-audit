@@ -25,25 +25,34 @@ def candidate_cost(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
 ) -> float | None:
-    """Cost of one request on a candidate. Unpriced models running locally count as free."""
-    try:
-        return prices.cost(
-            candidate.model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=cache_read_tokens,
-            cache_write_tokens=cache_write_tokens,
-        )
-    except UnknownModelError:
-        return 0.0 if candidate.runs_locally else None
+    """Cost of one request on a candidate. Unpriced models running locally count as free;
+    candidates without a price of their own (routers) are priced as `price_as`."""
+    for model in (candidate.model, candidate.price_as):
+        if model is None:
+            continue
+        try:
+            return prices.cost(
+                model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=cache_write_tokens,
+            )
+        except UnknownModelError:
+            continue
+    return 0.0 if candidate.runs_locally else None
 
 
 def completion_cost(
     prices: PriceTable, candidate: Candidate, completion: Completion
 ) -> float | None:
-    """What a call cost: the provider's own figure when it reports one, else from prices."""
+    """What a call cost: the provider's own figure when it reports one, else from prices.
+    A router's call is priced as the model it picked (never as `price_as`, which is only a
+    ceiling for estimates)."""
     if completion.cost is not None:
         return completion.cost
+    if candidate.router:
+        return _served_cost(prices, candidate, completion)
     return candidate_cost(
         prices,
         candidate,
@@ -52,6 +61,24 @@ def completion_cost(
         cache_read_tokens=completion.cache_read_tokens,
         cache_write_tokens=completion.cache_write_tokens,
     )
+
+
+def _served_cost(prices: PriceTable, candidate: Candidate, completion: Completion) -> float | None:
+    served = completion.served_model
+    if not served:
+        return None
+    for name in (served, f"{candidate.provider}/{served}"):
+        try:
+            return prices.cost(
+                name,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                cache_read_tokens=completion.cache_read_tokens,
+                cache_write_tokens=completion.cache_write_tokens,
+            )
+        except UnknownModelError:
+            continue
+    return None
 
 
 # Token counts estimated from text length can run low, and every message adds a few tokens.
@@ -149,6 +176,8 @@ class ReplayResult:
     cached: bool = False
     error: str | None = None
     tool_calls: list[dict[str, Any]] | None = None  # tools the candidate asked to call
+    served_model: str | None = None  # the model that answered (for routers: its pick)
+    router: bool = False
 
     @property
     def label(self) -> str:
@@ -180,6 +209,7 @@ def _base(record: LogRecord, candidate: Candidate, status: str, **extra: Any) ->
         effort=candidate.effort,
         provider=candidate.provider,
         status=status,
+        router=candidate.router,
         **extra,
     )
 
@@ -207,6 +237,7 @@ def _completed(
         tool_calls=[c.model_dump() for c in completion.tool_calls]
         if completion.tool_calls
         else None,
+        served_model=completion.served_model,
     )
 
 

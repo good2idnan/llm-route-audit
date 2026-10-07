@@ -6,13 +6,14 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Provider = Literal["anthropic", "openai", "ollama", "openrouter"]
+Provider = Literal["anthropic", "gemini", "openai", "ollama", "openrouter"]
 # "none" and "minimal" exist on OpenAI models; providers reject levels a model doesn't support.
 Effort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 OLLAMA_PREFIX = "ollama/"
 OPENROUTER_PREFIX = "openrouter/"
 OPENAI_PREFIX = "openai/"
+GEMINI_PREFIX = "gemini/"
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]", "0.0.0.0")
 
 
@@ -26,6 +27,12 @@ class Candidate(BaseModel):
     # OpenAI-compatible servers other than OpenAI itself (provider: openai only).
     base_url: str | None = None
     api_key_env: str | None = None
+    # A router (OpenRouter's Auto Router, Jev Router, a LiteLLM auto-router, ...) picks a
+    # model per request. Its picks are recorded and the report audits them.
+    router: bool = False
+    # A model to price estimates and --max-spend with, for candidates without a fixed
+    # price (routers): usually the most expensive model the router may pick.
+    price_as: str | None = None
 
     @model_validator(mode="after")
     def _resolve_provider(self) -> "Candidate":
@@ -34,6 +41,8 @@ class Candidate(BaseModel):
                 self.provider = "ollama"
             elif self.model.startswith(OPENROUTER_PREFIX):
                 self.provider = "openrouter"
+            elif self.model.startswith(GEMINI_PREFIX):
+                self.provider = "gemini"
             elif self.model.startswith(OPENAI_PREFIX) or self.base_url:
                 self.provider = "openai"
             elif self.model.startswith("claude-"):
@@ -41,7 +50,7 @@ class Candidate(BaseModel):
             else:
                 raise ValueError(
                     f"can't tell which provider serves '{self.model}'. "
-                    "Set provider: anthropic, openai, openrouter or ollama."
+                    "Set provider: anthropic, gemini, openai, openrouter or ollama."
                 )
         if self.provider == "ollama" and self.effort is not None:
             raise ValueError(f"'{self.model}': effort is not supported for Ollama models")
@@ -52,7 +61,7 @@ class Candidate(BaseModel):
     @property
     def api_model(self) -> str:
         """The model name the provider's API expects."""
-        for prefix in (OLLAMA_PREFIX, OPENROUTER_PREFIX, OPENAI_PREFIX):
+        for prefix in (OLLAMA_PREFIX, OPENROUTER_PREFIX, OPENAI_PREFIX, GEMINI_PREFIX):
             if self.model.startswith(prefix):
                 return self.model.removeprefix(prefix)
         return self.model

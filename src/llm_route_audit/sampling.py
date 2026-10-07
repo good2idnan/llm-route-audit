@@ -71,6 +71,25 @@ def _session_sample(records: list[LogRecord], size: int, seed: int) -> list[LogR
     return sorted(picked, key=lambda r: r.id)
 
 
+def sample_sessions(
+    records: list[LogRecord], count: int, seed: int = 0
+) -> list[tuple[str, list[LogRecord]]]:
+    """About `count` whole sessions, spread across session types: (type, steps) pairs."""
+    groups: dict[str, list[list[LogRecord]]] = defaultdict(list)
+    for steps in sessions(records):
+        if steps[0].session_id:
+            groups[session_type(steps)].append(steps)
+    if not groups:
+        return []
+    rng = random.Random(seed)
+    quotas = allocate({g: len(units) for g, units in groups.items()}, count)
+    picked = []
+    for group in sorted(groups):
+        units = sorted(groups[group], key=lambda steps: steps[0].session_id or "")
+        picked += [(group, steps) for steps in rng.sample(units, quotas[group])]
+    return picked
+
+
 def stratified_sample(records: list[LogRecord], size: int, seed: int = 0) -> list[LogRecord]:
     """About `size` records spread across task types. The same seed gives the same sample.
 

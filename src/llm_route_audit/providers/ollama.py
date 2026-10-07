@@ -47,6 +47,7 @@ def parse_response(data: dict[str, Any]) -> Completion:
         output_tokens=data.get("eval_count", 0),
         status="truncated" if data.get("done_reason") == "length" else "ok",
         tool_calls=parse_openai_tool_calls(data.get("message", {}).get("tool_calls")),
+        served_model=data.get("model"),
     )
 
 

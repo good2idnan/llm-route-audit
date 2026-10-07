@@ -39,3 +39,14 @@ class Policy(BaseModel):
 
 def load_policy(path: str | Path) -> Policy:
     return Policy.model_validate(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
+
+
+def litellm_model(model: str, provider: str | None) -> tuple[str, str | None]:
+    """LiteLLM's name for a model, and the provider it implies."""
+    if provider == "anthropic" or (provider is None and model.startswith("claude-")):
+        return f"anthropic/{model}", "anthropic"
+    if model.startswith("openrouter/"):
+        return model, "openrouter"
+    if model.startswith("ollama/"):
+        return model, "ollama"
+    return model, provider

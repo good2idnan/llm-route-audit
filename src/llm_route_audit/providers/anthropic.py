@@ -51,6 +51,7 @@ def parse_response(response: Any) -> Completion:
         cache_write_tokens=getattr(usage, "cache_creation_input_tokens", None) or 0,
         status=STATUS_BY_STOP_REASON.get(response.stop_reason, "ok"),
         tool_calls=parse_anthropic_tool_calls(response.content),
+        served_model=getattr(response, "model", None),
     )
 
 

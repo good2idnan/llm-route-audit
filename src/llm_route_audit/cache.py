@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS completions (
     latency_ms REAL,
     created_at TEXT NOT NULL,
     cost REAL,
-    tool_calls TEXT
+    tool_calls TEXT,
+    served_model TEXT
 )
 """
 
@@ -68,18 +69,21 @@ class ResultCache:
             self._db.execute("ALTER TABLE completions ADD COLUMN cost REAL")
         if "tool_calls" not in columns:  # caches made before agent steps were supported
             self._db.execute("ALTER TABLE completions ADD COLUMN tool_calls TEXT")
+        if "served_model" not in columns:  # caches made before router audits
+            self._db.execute("ALTER TABLE completions ADD COLUMN served_model TEXT")
 
     def get(self, key: str) -> tuple[Completion, float | None] | None:
         row = self._db.execute(
             "SELECT text, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
-            "status, latency_ms, cost, tool_calls FROM completions WHERE key = ?",
+            "status, latency_ms, cost, tool_calls, served_model FROM completions WHERE key = ?",
             (key,),
         ).fetchone()
         if row is None:
             return None
-        text, inp, out, cread, cwrite, status, latency, cost, calls = row
+        text, inp, out, cread, cwrite, status, latency, cost, calls, served = row
         tool_calls = [ToolCall.model_validate(c) for c in json.loads(calls)] if calls else None
-        return Completion(text, inp, out, cread, cwrite, status, cost, tool_calls), latency
+        completion = Completion(text, inp, out, cread, cwrite, status, cost, tool_calls, served)
+        return completion, latency
 
     def put(
         self, key: str, candidate: Candidate, completion: Completion, latency_ms: float | None
@@ -87,7 +91,8 @@ class ResultCache:
         self._db.execute(
             "INSERT OR REPLACE INTO completions (key, model, effort, text, input_tokens, "
             "output_tokens, cache_read_tokens, cache_write_tokens, status, latency_ms, "
-            "created_at, cost, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "created_at, cost, tool_calls, served_model) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 key,
                 candidate.model,
@@ -104,6 +109,7 @@ class ResultCache:
                 json.dumps([c.model_dump() for c in completion.tool_calls])
                 if completion.tool_calls
                 else None,
+                completion.served_model,
             ),
         )
         self._db.commit()

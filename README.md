@@ -49,7 +49,9 @@ llm-route-audit is not a router. It measures whether routing pays off, and can t
 - **Per task type.** Recommends a model for each kind of request, since one cheaper model rarely fits all of them.
 - **Honest grading.** Exact checks first (JSON, fields, required text), then an AI judge that reads each pair in both orders, with its consistency reported.
 - **Model and effort.** Tests (model, reasoning effort) pairs, not just models.
-- **Agents too.** Audits tool-using agents step by step, and recommends a model per type of session.
+- **Agents too.** Audits tool-using agents step by step, re-runs whole sessions, and recommends a model per type of session.
+- **Audits routers.** Checks whether an auto-router's picks beat simpler strategies.
+- **Closes the loop.** A runtime router applies the policy in your app, and real-world feedback can send a route back.
 - **Spending you control.** A cost estimate and confirmation before any paid call, plus a hard `--max-spend` limit that can't be exceeded. Answers are cached, so you never pay twice.
 - **Readable output.** An offline HTML report, a YAML policy, or a ready-to-use LiteLLM config.
 - **Local first.** Logs, results and reports stay on your machine.
@@ -57,7 +59,7 @@ llm-route-audit is not a router. It measures whether routing pays off, and can t
 ## How it works
 
 ```
-your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ report ─▶ export policy ─▶ monitor
+your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ report ─▶ export policy ─▶ monitor / outcomes
 ```
 
 | Command | What it does |
@@ -67,12 +69,14 @@ your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ repo
 | `llm-route-audit redact` | Hide private data (emails, phones, cards, secrets, ...) in a copy of your logs |
 | `llm-route-audit validate` | Check a log file |
 | `llm-route-audit analyze` | Show what your traffic costs today, by task type and model |
-| `llm-route-audit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenAI, OpenRouter, Ollama, any OpenAI-compatible server) |
+| `llm-route-audit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenAI, Gemini, OpenRouter, Ollama, any OpenAI-compatible server) or routers |
 | `llm-route-audit grade` | Compare every answer with the original: exact checks, then an AI judge |
 | `llm-route-audit report` | Recommend a model per task type, with cost and quality for each strategy |
 | `llm-route-audit export` | Write the policy as YAML or as a LiteLLM proxy config |
 | `llm-route-audit monitor` | After you switch, check that routed traffic still meets the audited quality |
 | `llm-route-audit check-model` | Test a newly released model on your last audit's sample and see what it would change |
+| `llm-route-audit outcomes` | Learn from real-world feedback: send a route back if its good-outcome rate drops |
+| `llm-route-audit rerun` | Re-run whole agent sessions on cheaper models and see if they still finish the job |
 
 ## Audit your own traffic
 
@@ -173,6 +177,23 @@ uv run llm-route-audit check-model examples/sample_logs.jsonl -m claude-sonnet-5
 
 It replays and grades only the new model, adds its results to your audit files, and shows which tasks it would take over and how projected savings change. To test the "one strong model at lower effort" alternative, check your current model at `--effort low`.
 
+**8. Learn from real-world feedback**
+
+If your app records how requests turned out (thumbs up or down, tests passed, ticket resolved), put it in each log record's `outcome` field, or in a separate file of `record_id,outcome` lines like the one the runtime router writes:
+
+```bash
+uv run llm-route-audit outcomes production-logs.jsonl --policy routing-policy.yaml --outcomes feedback.csv --out updated-policy.yaml
+```
+
+For each task that switched to a cheaper model, it compares the share of good outcomes on that model with the share on the model it replaced, from logs before the switch or from traffic you keep on it. Values such as `good`, `thumbs_up`, `resolved` and `bad`, `thumbs_down`, `escalated` are recognised; add your own with `--good` and `--bad`.
+
+| Status | Meaning |
+|---|---|
+| `OK` | As many good outcomes as the model it replaced |
+| `WAIT` | Too few outcomes on one of the models to judge (`--min-outcomes 30`) |
+| `WATCH` | Fewer good outcomes, but it could still be chance |
+| `REVERT` | 95% sure the routed model does worse. `--out` writes a policy with the route sent back, and the command exits with code 2. |
+
 ## Agents
 
 Tool-using agents can be audited too. Each logged model call is one step: the history so far (including tool calls and tool results) and what the model did next, either calling tools or replying.
@@ -200,7 +221,53 @@ tasks:
       judge_alternatives: true           # the judge decides if a different step is still reasonable
 ```
 
-Give every step of a session the same `session_id` and the same task type (the session type). Matching the next step is not the same as finishing the task: a model can take a different path that also works, which is what `judge_alternatives` is for. Logs need the tool definitions and full tool results. Re-running sessions against your live tools is not supported.
+Give every step of a session the same `session_id` and the same task type (the session type). Matching the next step is not the same as finishing the task: a model can take a different path that also works, which is what `judge_alternatives` is for. Logs need the tool definitions and full tool results.
+
+**Re-run whole sessions.** To see whether a cheaper model actually finishes the job, let it drive entire sessions:
+
+```bash
+uv run llm-route-audit rerun examples/agent_logs.jsonl -c examples/candidates.yaml --config examples/grading-agent.yaml --sessions 10 --max-spend 1.00
+```
+
+The candidate starts from each session's opening request and makes its own tool calls. When it makes a call the original session made (same tool, same arguments), it gets the logged result back. That is free and runs nothing. A call the log has no result for ends the session there, unless you give your own tools:
+
+- `--tool-handler my_tools.py:handle`: a Python function called as `handle(name, arguments)`, for example a stub or a staging API.
+- `--mcp "python my_server.py"` (or a URL): tools from an MCP server. Needs `pip install "llm-route-audit[mcp]"`.
+
+These calls run for real, so point them at test accounts or a sandbox. llm-route-audit warns and asks first. The report shows, per session type, how many sessions finished, how many final answers passed grading, how many of the original tool calls the candidate also made, and the cost per session.
+
+## Audit a router
+
+Routers such as OpenRouter's Auto Router or TypeSafe's Jev Router pick a model for every request. Do their picks beat simply using one model, or your own per-task policy? Replay them like any other candidate, with `router: true`:
+
+```bash
+uv run llm-route-audit replay examples/sample_logs.jsonl -c examples/candidates-routers.yaml --max-spend 1.00
+uv run llm-route-audit grade examples/sample_logs.jsonl --config examples/grading.yaml --max-spend 1.00
+uv run llm-route-audit report examples/sample_logs.jsonl
+```
+
+Every answer records the model the router actually picked. The report adds a **Router audit**: which models the router chose for each task, how those answers graded, and whether any other strategy (your current setup, always one model, or the per-task policy) is at least as good for less money. A LiteLLM proxy with an auto-router is audited the same way, through `base_url`. See [`examples/candidates-routers.yaml`](examples/candidates-routers.yaml).
+
+Routers have no fixed price, so `price_as` names the model to use for estimates and the `--max-spend` limit (usually the most expensive model the router may pick). Real costs come from the provider's own figure, or from the price of the model the router picked.
+
+## Use the policy in your app
+
+No gateway? The runtime router applies an exported policy inside your Python app:
+
+```python
+from llm_route_audit.runtime import Router
+
+router = Router.from_file("routing-policy.yaml", log_path="logs/requests.jsonl")
+
+reply = router.complete("classify_ticket", [{"role": "user", "content": "I was charged twice"}])
+print(reply.text)
+
+router.record_outcome(reply.record_id, "thumbs_up")  # feedback from your users, if you have it
+```
+
+- `complete` sends the request to the model the policy picked for that task type, using the same providers as the audit. If the cheaper model fails, it retries once on the model it replaced.
+- Prefer your own client? `router.anthropic_args(task)`, `router.openai_args(task)` and `router.litellm_args(task)` return the model (and effort) to pass to the Anthropic SDK, the OpenAI SDK or LiteLLM.
+- With `log_path`, every call is saved in llm-route-audit's log format, ready for `monitor` and `outcomes`.
 
 ## Providers and spending
 
@@ -210,12 +277,13 @@ Name each candidate (and the judge) after where it runs, and put the key in a `.
 |---|---|---|
 | Anthropic | `claude-haiku-4-5` | `ANTHROPIC_API_KEY` |
 | OpenAI | `openai/gpt-6-luna` | `OPENAI_API_KEY` |
+| Google Gemini | `gemini/gemini-3-flash` | `GEMINI_API_KEY` |
 | [OpenRouter](https://openrouter.ai) | `openrouter/anthropic/claude-haiku-4.5` | `OPENROUTER_API_KEY` |
 | [Ollama](https://ollama.com) (local, free) | `ollama/llama3.2` | none |
 
 Any other server that speaks OpenAI's API, such as Groq, Together, vLLM or LM Studio, works through `base_url` (and `api_key_env` if its key has another name). See [`examples/candidates-openai.yaml`](examples/candidates-openai.yaml). Models on your own machine count as free.
 
-Effort levels (`none` to `max`, where a model supports them) go next to the model in the candidates file. Prices for OpenAI and OpenRouter models are looked up automatically, and OpenRouter's real cost for each call is recorded.
+Effort levels (`none` to `max`, where a model supports them) go next to the model in the candidates file. For Gemini they set the thinking level. Prices for OpenAI, Gemini and OpenRouter models are looked up automatically, and OpenRouter's real cost for each call is recorded.
 
 Three spending controls work on both `replay` and `grade`:
 
@@ -253,6 +321,8 @@ llm-route-audit label logs.jsonl --out labelled.jsonl --by laya --tasks tasks.ya
 ```
 
 `tasks.yaml` lists each task type with a one-line description (`tasks: {billing: "payments and refunds", ...}`). Requests laya is unsure about (`--min-confidence`) stay unlabelled. The laya extra installs PyTorch and downloads about 800 MB of model weights the first time.
+
+TypeSafe's hosted [Jev](https://docs.typesafe.ai) decision model does the same job through its API, with nothing to install: `--by jev`, with `TYPESAFE_API_KEY` in `.env`. It is fast and cheap (about $0.04 per million input tokens at launch), but the request text is sent to TypeSafe, so llm-route-audit shows the estimate and asks first.
 
 **Private data in your logs?** Clean a copy first and run the audit on that copy, so no private values are sent to any model:
 
@@ -312,10 +382,13 @@ Treat it as one signal. Exact checks come first and settle formats and facts for
 At least 10 graded answers per task type before anything is recommended, and 30 or more for confident numbers. The report shows a 95% range for every pass rate and every cost.
 
 **Does it handle agents and tool calls?**
-Yes, step by step: each step is replayed with its real history and the tool calls are compared with the original. See [Agents](#agents). Running sessions against your live tools is not supported.
+Yes, two ways. The next-step audit replays each step with its real history and compares the tool calls with the original. `rerun` lets a cheaper model drive whole sessions, with tool results from the log or from your own tools. See [Agents](#agents).
+
+**Is an auto-router worth it?**
+Audit it: replay it as a candidate with `router: true`, and the report shows its picks and whether a simpler strategy does as well for less. See [Audit a router](#audit-a-router).
 
 **Is this a router?**
-No. It audits routing and produces a policy. Put the policy in the gateway you already use, for example with the LiteLLM export.
+Not mainly. It audits routing and produces a policy. Put the policy in the gateway you already use, for example with the LiteLLM export, or apply it with the small runtime router in `llm_route_audit.runtime`, which only follows the policy: it does not guess task types or learn on its own.
 
 ## Development
 

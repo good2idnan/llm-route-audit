@@ -18,6 +18,9 @@ class Completion:
     cost: float | None = None
     # Tools the model asked to call instead of (or as well as) answering in text.
     tool_calls: list[ToolCall] | None = None
+    # The model that actually answered, as the provider reports it. For a router this is
+    # the model it picked.
+    served_model: str | None = None
 
 
 class ProviderError(Exception):

@@ -63,6 +63,7 @@ def parse_response(data: dict[str, Any]) -> Completion:
         status=status or STATUS_BY_FINISH.get(finish, "ok"),
         cost=usage.get("cost"),
         tool_calls=parse_openai_tool_calls((choice.get("message") or {}).get("tool_calls")),
+        served_model=data.get("model"),
     )
 
 

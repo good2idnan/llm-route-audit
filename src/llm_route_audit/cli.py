@@ -3,9 +3,10 @@
 import json
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 import yaml
@@ -13,6 +14,7 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import ValidationError
 
 from llm_route_audit import __version__
+from llm_route_audit import outcomes as feedback
 from llm_route_audit.analyze import UNLABELLED, build_profile
 from llm_route_audit.batching import BATCH_DISCOUNT, BATCH_PROVIDERS, batch_client_for, run_batches
 from llm_route_audit.cache import ResultCache
@@ -33,6 +35,7 @@ from llm_route_audit.display import (
     render_grades,
     render_profile,
     render_replay,
+    table,
     usd,
 )
 from llm_route_audit.grading.grade import (
@@ -49,8 +52,11 @@ from llm_route_audit.ingest.langfuse import import_langfuse
 from llm_route_audit.ingest.litellm import import_litellm
 from llm_route_audit.ingest.otel import DEFAULT_TASK_ATTRIBUTE, import_otel
 from llm_route_audit.labeling import (
+    DecisionLabeler,
+    JevLabeler,
+    Label,
+    LabelerUnavailable,
     LayaLabeler,
-    LayaUnavailable,
     apply_labels,
     label_by_system_prompt,
     load_tasks,
@@ -66,6 +72,7 @@ from llm_route_audit.monitor import (
 )
 from llm_route_audit.policy import load_policy
 from llm_route_audit.providers import ProviderError, get_provider
+from llm_route_audit.providers.http import HTTPFailure
 from llm_route_audit.providers.openrouter import fetch_prices as fetch_openrouter_prices
 from llm_route_audit.records import LogRecord
 from llm_route_audit.redaction import load_redaction_config, redact_record
@@ -88,8 +95,22 @@ from llm_route_audit.report import (
     policy_yaml,
 )
 from llm_route_audit.report_view import render_html, render_text
+from llm_route_audit.rerun import (
+    Budget,
+    FunctionTools,
+    MCPTools,
+    RecordedTools,
+    ToolSource,
+    ToolsUnavailable,
+    render_reruns,
+    run_session,
+    session_estimate,
+    write_runs,
+)
+from llm_route_audit.rerun import apply_grades as apply_rerun_grades
+from llm_route_audit.rerun import grading_inputs as rerun_grading_inputs
 from llm_route_audit.runner import Job, execute
-from llm_route_audit.sampling import stratified_sample
+from llm_route_audit.sampling import sample_sessions, stratified_sample
 
 app = typer.Typer(
     help="Find out whether LLM model routing saves money without hurting quality, "
@@ -149,19 +170,33 @@ def _price_id(candidate: Candidate) -> str | None:
         return candidate.api_model
     if candidate.provider == "openai" and not candidate.base_url:
         return f"openai/{candidate.api_model}"  # OpenAI's own models, at OpenAI's prices
+    if candidate.provider == "gemini":
+        return f"google/{candidate.api_model}"  # Google's models, at Google's prices
     return None
 
 
+def _price_as(candidate: Candidate) -> Candidate | None:
+    if not candidate.price_as:
+        return None
+    try:
+        return Candidate(model=candidate.price_as)
+    except ValidationError:
+        return None  # a model name the price table must list itself
+
+
 def _prices(path: Path | None, candidates: list[Candidate] = ()) -> PriceTable:
-    """Load prices, then look up OpenRouter and OpenAI models the table doesn't list."""
+    """Load prices, then look up OpenRouter, OpenAI and Gemini models the table doesn't
+    list, from OpenRouter's public model list."""
     try:
         table = load_prices(path)
     except (yaml.YAMLError, ValidationError) as e:
         typer.echo(f"Could not read prices file {path}: {e}", err=True)
         raise typer.Exit(code=1) from None
+    # Routers have no fixed price; their `price_as` model prices estimates instead.
+    priced = list(candidates) + [p for c in candidates if (p := _price_as(c))]
     missing = {
         c.model: price_id
-        for c in candidates
+        for c in priced
         if c.model not in table.models and (price_id := _price_id(c))
     }
     if missing:
@@ -1049,9 +1084,272 @@ def check_model(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def outcomes(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Production logs with an outcome per request (from before and after the switch).",
+        ),
+    ],
+    policy_path: Annotated[
+        Path,
+        typer.Option(
+            "--policy",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Policy written by `llm-route-audit export` (YAML format).",
+        ),
+    ],
+    outcome_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--outcomes",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Extra outcomes (CSV or JSONL with record_id and outcome), such as the file "
+            "the runtime router writes. They override the logs' own outcome field.",
+        ),
+    ] = None,
+    good: Annotated[
+        list[str] | None,
+        typer.Option(help="Another outcome value that means good. Repeat for more."),
+    ] = None,
+    bad: Annotated[
+        list[str] | None,
+        typer.Option(help="Another outcome value that means bad. Repeat for more."),
+    ] = None,
+    min_outcomes: Annotated[
+        int, typer.Option(min=1, help="Outcomes needed on each model before judging.")
+    ] = feedback.DEFAULT_MIN_OUTCOMES,
+    tolerance: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="How much lower a routed model may score."),
+    ] = feedback.DEFAULT_TOLERANCE,
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Write an updated policy here, with REVERT routes sent back."),
+    ] = None,
+) -> None:
+    """Learn from real-world feedback: are routed tasks getting as many good outcomes as before?
+
+    Exits with code 2 when a route should be reverted, so it can run from cron or CI.
+    """
+    records = _load_records(path)
+    try:
+        policy = load_policy(policy_path)
+        extra = feedback.load_outcome_file(outcome_file) if outcome_file else {}
+    except (yaml.YAMLError, ValidationError, ValueError, OSError) as e:
+        typer.echo(f"Could not read the policy or outcomes: {e}", err=True)
+        raise typer.Exit(code=1) from None
+    report = feedback.assess_outcomes(
+        records,
+        policy,
+        extra,
+        good=feedback.GOOD | {feedback.outcome_key(v) for v in good or []},
+        bad=feedback.BAD | {feedback.outcome_key(v) for v in bad or []},
+        min_outcomes=min_outcomes,
+        tolerance=tolerance,
+    )
+    typer.echo(feedback.render_outcomes(report, path.as_posix()))
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(feedback.updated_policy_yaml(policy, report), encoding="utf-8")
+        typer.echo(f"Updated policy saved to {out.as_posix()}")
+    if report.reverts:
+        raise typer.Exit(code=2)
+
+
+@app.command()
+def rerun(
+    path: LogsArg,
+    candidates_path: Annotated[
+        Path,
+        typer.Option(
+            "--candidates",
+            "-c",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="YAML file listing the models to test.",
+        ),
+    ],
+    sessions_wanted: Annotated[
+        int, typer.Option("--sessions", min=1, help="Agent sessions to re-run, spread by type.")
+    ] = 10,
+    seed: Annotated[int, typer.Option(help="Picks the sessions. Same seed, same pick.")] = 0,
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Grading rules (YAML) for the final answers, and agent.ignore_arguments.",
+        ),
+    ] = None,
+    tool_handler: Annotated[
+        str | None,
+        typer.Option(
+            help="Your tools as a Python function, FILE.py:FUNCTION or MODULE:FUNCTION, called "
+            "as FUNCTION(name, arguments). Answers calls the log has no result for. Runs for real."
+        ),
+    ] = None,
+    mcp: Annotated[
+        str | None,
+        typer.Option(
+            help='Your tools from an MCP server: a command such as "python server.py", or a URL. '
+            "Answers calls the log has no result for. Runs for real."
+        ),
+    ] = None,
+    max_turns: Annotated[
+        int | None,
+        typer.Option(min=1, help="Most model calls per session. Default: twice the original."),
+    ] = None,
+    prices: PricesOpt = None,
+    out: Annotated[Path, typer.Option(help="Where to save the results (JSONL).")] = WORK_DIR
+    / "reruns.jsonl",
+    cache_path: Annotated[
+        Path, typer.Option("--cache", help="Cache of answers already paid for (SQLite).")
+    ] = WORK_DIR / "cache.sqlite",
+    budget: Annotated[
+        float | None,
+        typer.Option(min=0, help="Don't start if the estimate is above this many USD."),
+    ] = None,
+    max_spend: MaxSpendOpt = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show the plan and cost estimate, then stop.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
+    ] = False,
+) -> None:
+    """Re-run whole agent sessions on cheaper models and see if they still finish the job."""
+    records = _load_records(path)
+    picked = sample_sessions(records, sessions_wanted, seed=seed)
+    if not picked:
+        typer.echo("No agent sessions found: re-runs need records with a session_id.", err=True)
+        raise typer.Exit(code=1)
+    candidates = _candidates(candidates_path)
+    try:
+        rules = load_config(config)
+    except (yaml.YAMLError, ValidationError) as e:
+        typer.echo(f"Could not use the grading settings: {e}", err=True)
+        raise typer.Exit(code=1) from None
+    judge = rules.judge.candidate()
+    price_table = _prices(prices, [*candidates, judge])
+
+    estimates = {
+        c.label: [session_estimate(price_table, c, steps) for _, steps in picked]
+        for c in candidates
+    }
+    finals = [steps[-1] for _, steps in picked]
+    judge_cost = judge_upper_bound(price_table, judge, rules, finals)
+    total: float | None = 0.0
+    typer.echo(f"Re-run plan: {len(picked)} sessions x {len(candidates)} candidates")
+    counts = Counter(task for task, _ in picked)
+    typer.echo("Sessions: " + ", ".join(f"{t} {n}" for t, n in sorted(counts.items())))
+    rows = []
+    for c in candidates:
+        values = estimates[c.label]
+        cost = None if None in values else sum(v for v in values if v is not None)
+        total = None if cost is None or total is None else total + cost
+        rows.append([c.label, usd(cost) if cost is not None else "unknown"])
+    judge_total = None if judge_cost is None else judge_cost * len(candidates)
+    total = None if total is None or judge_total is None else total + judge_total
+    rows.append(
+        [
+            f"judge ({judge.label}), at most",
+            usd(judge_total) if judge_total is not None else "unknown",
+        ]
+    )
+    typer.echo("")
+    for line in table(["Model", "Est. cost"], rows):
+        typer.echo(line)
+    typer.echo(
+        f"{INDENT}Estimates assume each session takes as many turns as the original. "
+        "Use --max-spend for a hard limit."
+    )
+    tools_note = "the log"
+    if tool_handler or mcp:
+        tools_note += " first, then " + (
+            "your function " + tool_handler if tool_handler else f"MCP server {mcp}"
+        )
+        typer.echo("")
+        typer.echo(
+            "Warning: tool calls the log has no result for will run for real through your tools. "
+            "Use test accounts or a sandbox."
+        )
+    typer.echo("")
+    if dry_run:
+        typer.echo("Dry run: nothing was sent.")
+        return
+    _confirm_spend(total, budget, yes)
+    if (tool_handler or mcp) and not yes:
+        if not typer.confirm("Run your tools for real when needed?", default=False):
+            raise typer.Exit(code=1)
+
+    live: list[ToolSource] = []
+    try:
+        if tool_handler:
+            live.append(FunctionTools.load(tool_handler))
+        if mcp:
+            live.append(MCPTools(mcp))
+    except ToolsUnavailable as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from None
+
+    cache = ResultCache(cache_path)
+    spend = Budget(limit=max_spend)
+    runs = []
+    providers: dict[str, Any] = {}
+    try:
+        done = 0
+        progress = _progress("sessions")
+        for candidate in candidates:
+            provider = providers.setdefault(candidate.provider, get_provider(candidate.provider))
+            for task, steps in picked:
+                ignore = rules.rule_for(task).agent.ignore_arguments
+                sources = [RecordedTools(steps, ignore), *live]
+                try:
+                    runs.append(
+                        run_session(candidate, steps, task, provider, sources, cache,
+                                    price_table, spend, max_turns, ignore)
+                    )  # fmt: skip
+                except ProviderError as e:
+                    typer.echo(f"Stopped: {e}", err=True)
+                    raise typer.Exit(code=1) from None
+                done += 1
+                progress(done, len(picked) * len(candidates))
+        steps_of = {steps[0].session_id or steps[0].id: steps for _, steps in picked}
+        judge_records, answers = rerun_grading_inputs(runs, steps_of)
+        plan = plan_grades(judge_records, answers, rules)
+        remaining = None if max_spend is None else max(0.0, max_spend - spend.spent)
+        graded = run_judges(
+            plan, cache, price_table, provider_for=get_provider, max_spend=remaining
+        )
+        spend.spent += graded.judge_spent
+        apply_rerun_grades(runs, graded.grades)
+    finally:
+        cache.close()
+        for source in live:
+            if isinstance(source, MCPTools):
+                source.close()
+
+    write_runs(out, runs)
+    typer.echo("")
+    typer.echo(render_reruns(runs, path.as_posix(), tools_note, spend.spent))
+    typer.echo(f"\nResults saved to {out.as_posix()}")
+
+
 class LabelMethod(StrEnum):
     system_prompt = "system-prompt"
     laya = "laya"
+    jev = "jev"
 
 
 @app.command()
@@ -1062,7 +1360,8 @@ def label(
         LabelMethod,
         typer.Option(
             help="system-prompt: group requests that share system instructions (free, instant). "
-            "laya: sort into --tasks with the local laya model."
+            "laya: sort into --tasks with the local laya model. "
+            "jev: sort into --tasks with TypeSafe's Jev API (paid, sends request text)."
         ),
     ] = LabelMethod.system_prompt,
     tasks: Annotated[
@@ -1071,38 +1370,57 @@ def label(
             exists=True,
             dir_okay=False,
             readable=True,
-            help="laya: YAML file listing your task types and a one-line description of each.",
+            help="laya/jev: YAML file listing your task types and a one-line description of each.",
         ),
     ] = None,
     min_confidence: Annotated[
         float,
-        typer.Option(min=0.0, max=1.0, help="laya: leave a request unlabelled below this."),
+        typer.Option(min=0.0, max=1.0, help="laya/jev: leave a request unlabelled below this."),
     ] = 0.6,
+    concurrency: Annotated[
+        int, typer.Option(min=1, max=32, help="jev: requests to send at the same time.")
+    ] = 8,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="jev: skip the confirmation before spending.")
+    ] = False,
     overwrite: Annotated[
         bool, typer.Option(help="Replace task types the log already has.")
     ] = False,
 ) -> None:
     """Give each request a task type, so reports can recommend a model per kind of request."""
     records = _load_records(path)
-    if by is LabelMethod.laya:
+    failed = 0
+    if by is LabelMethod.system_prompt:
+        labels = label_by_system_prompt(records)
+    else:
         if tasks is None:
-            typer.echo("--by laya needs --tasks, a YAML file listing your task types.", err=True)
+            typer.echo(f"--by {by} needs --tasks, a YAML file listing your task types.", err=True)
             raise typer.Exit(code=1)
+        labeler_class = LayaLabeler if by is LabelMethod.laya else JevLabeler
         try:
-            labeler = LayaLabeler(load_tasks(tasks), min_confidence=min_confidence)
+            labeler = labeler_class(load_tasks(tasks), min_confidence=min_confidence)
         except (yaml.YAMLError, ValidationError) as e:
             typer.echo(f"Could not read tasks file {tasks}: {e}", err=True)
             raise typer.Exit(code=1) from None
-        except LayaUnavailable as e:
+        except LabelerUnavailable as e:
             typer.echo(str(e), err=True)
             raise typer.Exit(code=1) from None
         todo = [r for r in records if overwrite or not r.task_type]
-        labels = {}
-        for done, record in enumerate(todo, start=1):
-            labels[record.id] = labeler.label(record)
-            _progress("requests")(done, len(todo))
-    else:
-        labels = label_by_system_prompt(records)
+        if isinstance(labeler, JevLabeler) and todo:
+            typer.echo(
+                f"Jev will read {len(todo)} requests (about {labeler.input_tokens(todo):,} "
+                f"tokens). The request text is sent to TypeSafe."
+            )
+            typer.echo(
+                f"{INDENT}Estimated cost: {usd(labeler.cost(todo))} at the launch price "
+                "of $0.042 per 1M input tokens."
+            )
+            _confirm_spend(labeler.cost(todo), None, yes)
+        try:
+            labels, failed = _label_all(labeler, todo, concurrency if by is LabelMethod.jev else 1)
+        except LabelerUnavailable as e:
+            typer.echo(f"Labelling stopped: {e}", err=True)
+            raise typer.Exit(code=1) from None
 
     labelled = apply_labels(records, labels, overwrite=overwrite)
     write_records(out, labelled)
@@ -1116,9 +1434,29 @@ def label(
         hint = (
             "they have no system instructions to group by"
             if by is LabelMethod.system_prompt
-            else f"laya was less than {min_confidence:.0%} sure or chose none of your tasks"
+            else f"{by} was less than {min_confidence:.0%} sure or chose none of your tasks"
         )
         typer.echo(f"{counts[UNLABELLED]} requests stayed unlabelled: {hint}.")
+    if failed:
+        typer.echo(f"{failed} requests could not be labelled (API errors); run again to retry.")
+
+
+def _label_all(
+    labeler: DecisionLabeler, records: list[LogRecord], concurrency: int
+) -> tuple[dict[str, Label], int]:
+    """Label records, several at a time. Returns the labels and how many failed."""
+    labels: dict[str, Label] = {}
+    failed = 0
+    progress = _progress("requests")
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(labeler.label, r): r for r in records}
+        for done, future in enumerate(as_completed(futures), start=1):
+            try:
+                labels[futures[future].id] = future.result()
+            except HTTPFailure:
+                failed += 1
+            progress(done, len(records))
+    return labels, failed
 
 
 @app.command()
