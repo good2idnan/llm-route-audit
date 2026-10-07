@@ -255,3 +255,50 @@ def test_anthropic_batch_round_trip():
     )
     assert check.done and check.results["k1"].text == "hello"
     assert check.results["k2"] == "batch request expired"
+
+
+def test_a_hiccup_while_checking_keeps_the_batch(cache, tmp_path):
+    class Flaky(FakeBatches):
+        def check(self, batch):
+            raise ProviderError("timed out")
+
+    progress = run(cache, tmp_path, jobs(CLAUDE, 2), Flaky())
+    assert progress.pending == 2
+    assert len(load_state(tmp_path / "batches.json")) == 1
+
+
+def test_bad_key_in_batch_mode_gives_a_clear_message(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from llm_route_audit.cli import app
+
+    class BadKey(FakeBatches):
+        def submit(self, candidate, items):
+            raise ProviderError("OpenRouter: API key expired.", fatal=True)
+
+    monkeypatch.setattr("llm_route_audit.cli.batch_client_for", lambda provider: BadKey())
+    sample = Path(__file__).resolve().parent.parent / "examples" / "sample_logs.jsonl"
+    candidates = tmp_path / "c.yaml"
+    candidates.write_text("candidates:\n  - model: claude-haiku-4-5\n", "utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "replay",
+            str(sample),
+            "-c",
+            str(candidates),
+            "--sample",
+            "3",
+            "--batch",
+            "--yes",
+            "--cache",
+            str(tmp_path / "cache.sqlite"),
+            "--out",
+            str(tmp_path / "r.jsonl"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Batch mode stopped: OpenRouter: API key expired." in result.output
+    assert "Traceback" not in result.output

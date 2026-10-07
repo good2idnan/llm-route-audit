@@ -64,7 +64,7 @@ from llm_route_audit.monitor import (
     render_monitor,
 )
 from llm_route_audit.policy import load_policy
-from llm_route_audit.providers import get_provider
+from llm_route_audit.providers import ProviderError, get_provider
 from llm_route_audit.providers.openrouter import fetch_prices as fetch_openrouter_prices
 from llm_route_audit.records import LogRecord
 from llm_route_audit.replay import (
@@ -240,17 +240,22 @@ def _collect_batches(
 ) -> float | None:
     """Run the batch step. Returns the spending limit left for anything that runs live, or
     exits when answers are still in progress."""
-    progress = run_batches(
-        jobs,
-        cache,
-        prices,
-        cache_path.parent / "batches.json",
-        batch_client_for,
-        max_spend=max_spend,
-        wait_seconds=wait_minutes * 60,
-        poll_seconds=poll_seconds,
-        on_status=lambda line: typer.echo(f"{INDENT}{line}", err=True),
-    )
+    try:
+        progress = run_batches(
+            jobs,
+            cache,
+            prices,
+            cache_path.parent / "batches.json",
+            batch_client_for,
+            max_spend=max_spend,
+            wait_seconds=wait_minutes * 60,
+            poll_seconds=poll_seconds,
+            on_status=lambda line: typer.echo(f"{INDENT}{line}", err=True),
+        )
+    except ProviderError as e:
+        typer.echo(f"Batch mode stopped: {e}", err=True)
+        typer.echo("Nothing more was sent. Batches already submitted stay saved.", err=True)
+        raise typer.Exit(code=1) from None
     typer.echo(
         f"Batch: sent {progress.submitted}, collected {progress.collected} "
         f"(cost {usd(progress.spent)}), still in progress {progress.pending}."

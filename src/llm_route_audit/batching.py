@@ -160,7 +160,15 @@ def run_batches(
     deadline = clock() + wait_seconds
     while state:
         for batch in list(state):
-            check = client_for(batch.candidate.provider).check(batch)
+            try:
+                check = client_for(batch.candidate.provider).check(batch)
+            except ProviderError as e:
+                if e.fatal:
+                    raise
+                # A hiccup while checking: the batch stays saved and is checked again.
+                if on_status:
+                    on_status(f"{batch.candidate.label}: could not check yet ({e})")
+                continue
             if on_status and check.progress:
                 on_status(f"{batch.candidate.label}: {check.progress}")
             if not check.done:
