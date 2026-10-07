@@ -86,3 +86,61 @@ def test_bad_config_is_rejected():
         TypeAdapter(Check).validate_python({"type": "regex", "pattern": "("})
     with pytest.raises(ValidationError):
         TypeAdapter(Check).validate_python({"type": "nope"})
+
+
+TICKET_SCHEMA = {
+    "type": "object",
+    "required": ["category", "priority"],
+    "properties": {
+        "category": {"enum": ["billing", "technical", "account"]},
+        "priority": {"enum": ["low", "normal", "high", "urgent"]},
+    },
+    "additionalProperties": False,
+}
+
+
+def schema_check(**fields):
+    return TypeAdapter(Check).validate_python({"type": "json_schema", **fields})
+
+
+def test_json_schema_check_names_the_first_problem():
+    check = schema_check(schema=TICKET_SCHEMA)
+    assert check.run('{"category": "billing", "priority": "high"}', REF).passed
+    wrong = check.run('{"category": "billing", "priority": "critical"}', REF)
+    assert wrong.passed is False
+    assert wrong.detail.startswith("$.priority: 'critical' is not one of")
+    assert "required" in check.run('{"category": "billing"}', REF).detail
+    assert check.run("not json", REF).detail == "not valid JSON"
+    fenced = '```json\n{"category": "billing", "priority": "low"}\n```'
+    assert check.run(fenced, REF).detail == "JSON is wrapped in a code fence"
+    assert schema_check(schema=TICKET_SCHEMA, allow_code_fence=True).run(fenced, REF).passed
+
+
+def test_schema_file_is_found_next_to_the_grading_file(tmp_path):
+    from llm_route_audit.grading.grade import load_config
+
+    (tmp_path / "schemas").mkdir()
+    (tmp_path / "schemas" / "ticket.json").write_text(json.dumps(TICKET_SCHEMA), "utf-8")
+    config = tmp_path / "grading.yaml"
+    config.write_text(
+        "tasks:\n  classify:\n    checks:\n"
+        "      - {type: json_schema, schema_file: schemas/ticket.json}\n",
+        "utf-8",
+    )
+    [check] = load_config(config).tasks["classify"].checks
+    assert check.name == "json_schema(ticket.json)"
+    assert check.run('{"category": "account", "priority": "low"}', REF).passed
+
+
+@pytest.mark.parametrize(
+    ("fields", "error"),
+    [
+        ({}, "either 'schema' or 'schema_file'"),
+        ({"schema": TICKET_SCHEMA, "schema_file": "x.json"}, "either 'schema' or 'schema_file'"),
+        ({"schema": {"type": "not-a-type"}}, "invalid JSON schema"),
+        ({"schema_file": "does/not/exist.json"}, "can't read schema file"),
+    ],
+)
+def test_bad_schemas_are_rejected_when_the_config_loads(fields, error):
+    with pytest.raises(ValidationError, match=error):
+        schema_check(**fields)

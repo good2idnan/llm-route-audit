@@ -11,9 +11,11 @@ toward its session's type, so a whole session stays on one model and keeps its c
 
 import json
 import math
+import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from llm_route_audit.sampling import session_type, sessions
 
 DEFAULT_TARGET = 0.95  # keep at least 95% of the original's pass rate
 DEFAULT_MIN_SAMPLES = 10
+BOOTSTRAP_ROUNDS = 1000
 
 
 def wilson_interval(passed: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
@@ -40,6 +43,28 @@ def wilson_interval(passed: int, n: int, z: float = 1.96) -> tuple[float, float]
     return max(0.0, centre - margin), min(1.0, centre + margin)
 
 
+def ratio_interval(
+    pairs: list[tuple[float, float]], rounds: int = BOOTSTRAP_ROUNDS, seed: int = 0
+) -> tuple[float, float] | None:
+    """95% range for a cost ratio (sum of costs over sum of original costs), found by
+    re-drawing the sampled requests at random many times (a bootstrap). The fixed seed
+    gives the same range for the same data."""
+    if len(pairs) < 2:
+        return None
+    rng = random.Random(seed)
+    ratios = []
+    for _ in range(rounds):
+        drawn = rng.choices(pairs, k=len(pairs))
+        base = sum(original for _, original in drawn)
+        if base > 0:
+            ratios.append(sum(cost for cost, _ in drawn) / base)
+    if not ratios:
+        return None
+    ratios.sort()
+    last = len(ratios) - 1
+    return ratios[round(0.025 * last)], ratios[round(0.975 * last)]
+
+
 @dataclass
 class OptionStats:
     label: str
@@ -50,6 +75,8 @@ class OptionStats:
     passed: int = 0
     cost: float = 0.0  # this option's cost on its sampled requests
     original_cost: float = 0.0  # what the same requests cost as logged
+    # (cost, original cost) per request, for the cost ratio's range
+    pairs: list[tuple[float, float]] = field(default_factory=list, repr=False)
 
     @property
     def pass_rate(self) -> float | None:
@@ -63,6 +90,11 @@ class OptionStats:
     def interval(self) -> tuple[float, float] | None:
         return wilson_interval(self.passed, self.graded)
 
+    @cached_property
+    def cost_interval(self) -> tuple[float, float] | None:
+        """95% range for the cost ratio. Read it once all requests are added."""
+        return ratio_interval(self.pairs)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "label": self.label,
@@ -74,6 +106,7 @@ class OptionStats:
             "pass_rate": self.pass_rate,
             "interval_95": self.interval,
             "cost_ratio": self.cost_ratio,
+            "cost_interval_95": self.cost_interval,
         }
 
 
@@ -275,6 +308,7 @@ def build_report(
         if cost is not None and original_cost is not None:
             option.cost += cost
             option.original_cost += original_cost
+            option.pairs.append((cost, original_cost))
         outcome = outcomes.get((label, record.id))
         if outcome in ("pass", "fail"):
             option.graded += 1
@@ -396,6 +430,8 @@ def policy_yaml(report: Report) -> str:
         evidence = t.reason
         if c.label != ORIGINAL and c.pass_rate is not None and c.cost_ratio is not None:
             evidence += f"; pass {c.pass_rate:.0%} on {c.graded}, cost {c.cost_ratio:.0%}"
+            if c.cost_interval is not None:
+                evidence += f" ({c.cost_interval[0]:.0%}-{c.cost_interval[1]:.0%})"
         lines.append(f"  {t.task}: {{{', '.join(fields)}}}  # {evidence}")
     return "\n".join(lines) + "\n"
 

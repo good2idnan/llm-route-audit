@@ -1,12 +1,13 @@
 name: Publish to PyPI
 
-# Runs when a GitHub release is published. Uses PyPI trusted publishing, so no API token
+# Publishes to PyPI with trusted publishing, so no API token
 # is stored in GitHub. Set it up once at pypi.org: Account > Publishing > add a pending
 # publisher for project "llm-route-audit", repository good2idnan/llm-route-audit,
 # workflow "publish.yml", environment "pypi".
+# Turned off for now (releases are published with `uv publish`); runs only when started by
+# hand. To publish on every GitHub release again, use:  release: {types: [published]}
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   publish:

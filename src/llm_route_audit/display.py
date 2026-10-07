@@ -226,7 +226,8 @@ def _label(model: str, effort: str | None) -> str:
 
 def render_grade_plan(plan: GradePlan, cost: float | None, calls: int) -> str:
     candidates = [g for g in plan.grades if g.candidate != ORIGINAL]
-    by_checks = [g for g in candidates if g.outcome in ("pass", "fail")]
+    human = [g for g in candidates if g.human]
+    by_checks = [g for g in candidates if g.outcome in ("pass", "fail") and not g.human]
     unusable = [
         g for g in candidates if g.outcome == "ungraded" and g.reason != "waiting for judge"
     ]
@@ -236,6 +237,15 @@ def render_grade_plan(plan: GradePlan, cost: float | None, calls: int) -> str:
         f"{INDENT}Settled by exact checks or replay status: {len(by_checks)} "
         f"(pass {sum(g.outcome == 'pass' for g in by_checks)}, "
         f"fail {sum(g.outcome == 'fail' for g in by_checks)})",
+        *(
+            [
+                f"{INDENT}Settled by your labels: {len(human)} "
+                f"(pass {sum(g.outcome == 'pass' for g in human)}, "
+                f"fail {sum(g.outcome == 'fail' for g in human)})"
+            ]
+            if human
+            else []
+        ),
         f"{INDENT}Need the judge: {len(plan.judge_pairs)} answers x 2 orders, "
         f"judge {plan.judge.label}",
     ]
@@ -285,6 +295,11 @@ def render_grades(run: GradeRun, out_path: str) -> str:
     )
 
     notes = []
+    labelled = sum(g.human for g in grades)
+    if labelled:
+        notes.append(
+            f"{labelled} answers graded by your labels, which override checks and the judge."
+        )
     if run.judged:
         notes.append(
             f"The judge gave the same verdict in both orders for {run.agreed} of {run.judged} "

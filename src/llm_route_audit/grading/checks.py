@@ -6,9 +6,20 @@ Each check compares a candidate's answer with the original (reference) answer fr
 import json
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+import jsonschema
+import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 CODE_FENCE = re.compile(r"^\s*```[\w-]*[ \t]*\n(.*?)\n?[ \t]*```\s*$", re.DOTALL)
 NUMBER_TOLERANCE = 0.005
@@ -94,6 +105,62 @@ class JsonCheck(_Check):
                 return CheckResult(self.name, False, "JSON is wrapped in a code fence")
             return CheckResult(self.name, False, "not valid JSON")
         return CheckResult(self.name, True)
+
+
+class JsonSchemaCheck(_Check):
+    """The answer must be JSON that fits a JSON Schema, given inline (`schema`) or in a
+    file (`schema_file`, relative to the grading file)."""
+
+    type: Literal["json_schema"]
+    schema_: dict[str, Any] | None = Field(default=None, alias="schema")
+    schema_file: str | None = None
+    allow_code_fence: bool = False
+    _validator: Any = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _load(self, info: ValidationInfo) -> "JsonSchemaCheck":
+        if (self.schema_ is None) == (self.schema_file is None):
+            raise ValueError("json_schema needs either 'schema' or 'schema_file'")
+        schema = self.schema_
+        if self.schema_file is not None:
+            path = Path(self.schema_file)
+            base = (info.context or {}).get("base_dir")
+            if not path.is_absolute() and base is not None:
+                path = Path(base) / path
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as e:
+                raise ValueError(f"can't read schema file {path}: {e.strerror}") from None
+            try:
+                schema = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
+            except (json.JSONDecodeError, yaml.YAMLError):
+                raise ValueError(f"schema file {path} is not valid JSON or YAML") from None
+        if not isinstance(schema, dict):
+            raise ValueError("a JSON schema must be an object")
+        validator = jsonschema.validators.validator_for(schema)
+        try:
+            validator.check_schema(schema)
+        except jsonschema.SchemaError as e:
+            raise ValueError(f"invalid JSON schema: {e.message}") from None
+        self._validator = validator(schema)
+        return self
+
+    @property
+    def name(self) -> str:
+        return f"json_schema({Path(self.schema_file).name})" if self.schema_file else "json_schema"
+
+    def run(self, answer: str, reference: str) -> CheckResult:
+        try:
+            data = parse_json(answer, self.allow_code_fence)
+        except ValueError:
+            if not self.allow_code_fence and strip_code_fence(answer) != answer:
+                return CheckResult(self.name, False, "JSON is wrapped in a code fence")
+            return CheckResult(self.name, False, "not valid JSON")
+        error = jsonschema.exceptions.best_match(self._validator.iter_errors(data))
+        if error is None:
+            return CheckResult(self.name, True)
+        message = error.message if len(error.message) <= 100 else error.message[:97] + "..."
+        return CheckResult(self.name, False, f"{error.json_path}: {message}")
 
 
 class MatchReferenceCheck(_Check):
@@ -207,6 +274,12 @@ class LengthCheck(_Check):
 
 
 Check = Annotated[
-    JsonCheck | MatchReferenceCheck | ExactMatchCheck | ContainsCheck | RegexCheck | LengthCheck,
+    JsonCheck
+    | JsonSchemaCheck
+    | MatchReferenceCheck
+    | ExactMatchCheck
+    | ContainsCheck
+    | RegexCheck
+    | LengthCheck,
     Field(discriminator="type"),
 ]

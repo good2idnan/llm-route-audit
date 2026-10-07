@@ -7,7 +7,13 @@ judge:
 tasks:
   classify_ticket:
     checks:
-      - type: json
+      - type: json_schema
+        schema:
+          type: object
+          required: [category, priority]
+          properties:
+            category: {enum: [billing, technical, account, sales, abuse]}
+            priority: {enum: [low, normal, high, urgent]}
       - type: match_reference
         fields: [category, priority]
 

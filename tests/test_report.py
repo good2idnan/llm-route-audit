@@ -128,7 +128,7 @@ def test_policy_yaml_is_valid_and_explains_each_route():
     data = yaml.safe_load(text)
     assert data["default"] == {"model": "big"}
     assert data["routes"]["easy"]["model"] == "cheap"
-    assert "pass 100% on 10, cost 10%" in text
+    assert "pass 100% on 10, cost 10% (10%-10%)" in text  # with the cost ratio's range
 
 
 def test_renderers_produce_text_and_self_contained_html():
@@ -189,3 +189,16 @@ def test_demo_results_in_the_repo_still_load():
     )
     assert len(report.tasks) == 5
     assert report.policy.quality == 1.0
+
+
+def test_cost_ratio_range_by_bootstrap():
+    from llm_route_audit.report import ratio_interval
+
+    assert ratio_interval([(0.5, 1.0)]) is None  # one request: no range
+    assert ratio_interval([(0.5, 1.0)] * 20) == (0.5, 0.5)  # no spread, no width
+    pairs = [(0.2, 1.0), (0.9, 1.0), (0.4, 1.0), (0.6, 1.0)] * 5
+    low, high = ratio_interval(pairs)
+    assert low < 0.525 < high  # the point estimate sits inside
+    assert 0.3 < low and high < 0.75
+    assert ratio_interval(pairs) == (low, high)  # the same data gives the same range
+    assert ratio_interval(pairs * 10)[1] - ratio_interval(pairs * 10)[0] < high - low

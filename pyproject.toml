@@ -1,6 +1,6 @@
 [project]
 name = "llm-route-audit"
-version = "0.2.0"
+version = "0.2.1"
 description = "Find out whether LLM model routing saves money without hurting quality, on your own traffic."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "anthropic>=1.11.0",
+    "jsonschema>=4.18",
     "pydantic>=2.7",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0",

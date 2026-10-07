@@ -42,6 +42,7 @@ from llm_route_audit.grading.grade import (
     run_judges,
     write_grades,
 )
+from llm_route_audit.grading.labels import LabelError, apply_human_labels, load_human_labels
 from llm_route_audit.ingest.common import DEFAULT_TASK_TAG_PREFIX, write_records
 from llm_route_audit.ingest.jsonl import LoadResult, load_jsonl
 from llm_route_audit.ingest.langfuse import import_langfuse
@@ -456,6 +457,16 @@ def grade(
         str | None, typer.Option(help="Judge model, e.g. claude-opus-5-5 or ollama/llama3.2.")
     ] = None,
     judge_effort: Annotated[Effort | None, typer.Option(help="Judge effort level.")] = None,
+    labels: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Your own pass/fail labels (CSV or JSONL). They override the checks and the "
+            "judge, and labelled answers are not sent to the judge.",
+        ),
+    ] = None,
     judge_max_tokens: Annotated[
         int | None, typer.Option(min=1, help="Most tokens the judge may write per verdict.")
     ] = None,
@@ -504,6 +515,21 @@ def grade(
     except (yaml.YAMLError, ValidationError) as e:
         typer.echo(f"Could not use the grading settings: {e}", err=True)
         raise typer.Exit(code=1) from None
+    if labels is not None:
+        try:
+            human = apply_human_labels(plan, load_human_labels(labels))
+        except LabelError as e:
+            typer.echo(f"Could not read the labels: {e}", err=True)
+            raise typer.Exit(code=1) from None
+        typer.echo(f"Your labels: {human.applied} applied from {labels.name}.")
+        if human.unmatched:
+            examples = ", ".join(
+                f"{label.record_id} / {label.candidate}" for label in human.unmatched[:3]
+            )
+            typer.echo(
+                f"{INDENT}{len(human.unmatched)} labels match no answer in this run "
+                f"(check record_id and candidate): {examples}"
+            )
     price_table = _prices(prices, [plan.judge])
 
     cache = ResultCache(cache_path)

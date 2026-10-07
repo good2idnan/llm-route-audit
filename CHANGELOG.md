@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 (2026-10-07)
+
+- New check `json_schema`: the answer must be JSON that fits a JSON Schema, inline or from a file next to the grading file. Errors name the first problem, such as `$.priority: 'critical' is not one of [...]`.
+- `grade --labels labels.csv`: your own pass/fail verdicts (CSV or JSONL) override the checks and the judge, and labelled answers are not sent to the judge. Unknown record ids or candidates are listed.
+- Cost ratios get a 95% range (bootstrap over the sampled requests) in the report, the HTML report, the JSON output and the exported policy's comments.
+- CI and publish workflows run only when started by hand.
+
 ## 0.2.0 (2026-10-07)
 
 Agent audits: tool-using agents are audited step by step.

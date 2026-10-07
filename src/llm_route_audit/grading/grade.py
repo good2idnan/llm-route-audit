@@ -91,7 +91,8 @@ def load_config(path: str | Path | None) -> GradingConfig:
     if path is None:
         return GradingConfig()
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    return GradingConfig.model_validate(data)
+    # Schema files are found relative to the grading file.
+    return GradingConfig.model_validate(data, context={"base_dir": Path(path).parent})
 
 
 @dataclass
@@ -105,6 +106,7 @@ class Grade:
     judge_votes: list[Result | None] = field(default_factory=list)
     reason: str | None = None
     step: str | None = None  # agent steps: "tool_call" or "answer" (what the original did)
+    human: bool = False  # graded by your own label, not by checks or the judge
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,6 +119,7 @@ class Grade:
             "judge_votes": self.judge_votes,
             "reason": self.reason,
             "step": self.step,
+            "human": self.human,
         }
 
 

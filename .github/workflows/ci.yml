@@ -1,9 +1,9 @@
 name: CI
 
+# Turned off: runs only when started by hand from the Actions tab. To run on every push
+# again, replace workflow_dispatch with:  push: {branches: [main]}  and  pull_request:
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:

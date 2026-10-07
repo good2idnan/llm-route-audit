@@ -16,6 +16,11 @@ def _range(option: OptionStats) -> str:
     return "-" if interval is None else f"{interval[0]:.0%}-{interval[1]:.0%}"
 
 
+def _cost_range(option: OptionStats) -> str:
+    interval = option.cost_interval
+    return "-" if interval is None else f"{interval[0]:.0%}-{interval[1]:.0%}"
+
+
 def _ratio(value: float | None) -> str:
     return "-" if value is None else pct(value)
 
@@ -112,7 +117,7 @@ def render_text(report: Report, html_path: str | None = None) -> str:
         ],
         text_columns=4,
     )
-    out += ["", "Details (pass rate with its 95% range, cost against the original)"]
+    out += ["", "Details (pass rate and cost against the original, each with its 95% range)"]
     rows = []
     for t in report.tasks:
         for option in [t.original, *t.options]:
@@ -124,9 +129,14 @@ def render_text(report: Report, html_path: str | None = None) -> str:
                     _rate(option),
                     _range(option),
                     _ratio(option.cost_ratio),
+                    _cost_range(option),
                 ]
             )
-    out += table(["Task", "Option", "Graded", "Pass", "95% range", "Cost"], rows, text_columns=2)
+    out += table(
+        ["Task", "Option", "Graded", "Pass", "95% range", "Cost", "95% range"],
+        rows,
+        text_columns=2,
+    )
     if report.sessions:
         out += ["", "Agent sessions, step by step", f"{INDENT}{SESSIONS_INTRO}"]
         out += table(SESSION_HEADERS, _session_rows(report), text_columns=2)
@@ -330,7 +340,7 @@ def render_html(report: Report, source: str) -> str:
     out.append("<section><h2>Details</h2><div class='panel'><table>")
     out.append(
         "<tr><th>Task</th><th>Option</th><th>Graded</th><th>Pass</th><th>95% range</th>"
-        "<th>Cost vs original</th></tr>"
+        "<th>Cost vs original</th><th>95% range</th></tr>"
     )
     for t in report.tasks:
         for option in [t.original, *t.options]:
@@ -338,7 +348,8 @@ def render_html(report: Report, source: str) -> str:
                 f"<tr><td>{_e(t.task)}</td><td>{_e(option.label)}</td>"
                 f"<td class='num'>{option.graded}</td><td class='num'>{_rate(option)}</td>"
                 f"<td class='num'>{_range(option)}</td>"
-                f"<td class='num'>{_ratio(option.cost_ratio)}</td></tr>"
+                f"<td class='num'>{_ratio(option.cost_ratio)}</td>"
+                f"<td class='num'>{_cost_range(option)}</td></tr>"
             )
     out.append("</table></div></section>")
     if report.sessions:

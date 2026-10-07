@@ -109,13 +109,31 @@ uv run llm-route-audit grade examples/sample_logs.jsonl --config examples/gradin
 
 Rules are set per task type in [`examples/grading.yaml`](examples/grading.yaml). Exact checks run first and cost nothing. Answers that pass them go to the AI judge, which compares each one with the original twice, swapping the order to cancel position bias. Disagreements count as ties. Pick the judge with `--judge-model`.
 
+| Check | Passes when the answer... |
+|---|---|
+| `json` | is valid JSON (code fences fail unless `allow_code_fence: true`) |
+| `json_schema` | is JSON that fits a JSON Schema, given inline (`schema:`) or in a file (`schema_file:`, relative to the grading file) |
+| `match_reference` | has the same values as the original in the listed JSON `fields` |
+| `exact_match` | equals the original, ignoring case and extra spaces |
+| `contains` | contains every listed text |
+| `regex` | matches a regular expression |
+| `length` | is between `min` and `max` characters |
+
+**Your own verdicts win.** Pass a file of pass/fail labels with `--labels labels.csv`. Each label overrides the checks and the judge for one answer, and labelled answers are never sent to the judge. Use the record id and the candidate name from `.llm-route-audit/grades.jsonl` (`original` for the logged answer):
+
+```csv
+record_id,candidate,outcome,note
+req_0042,claude-sonnet-5-5 @ low,fail,wrong refund amount
+req_0107,original,fail,the original answer was wrong too
+```
+
 **4. Get the report**
 
 ```bash
 uv run llm-route-audit report examples/sample_logs.jsonl
 ```
 
-For each task type, the report recommends the **cheapest option that keeps at least 95% of the original's pass rate**, and only once that option has **at least 10 graded answers**. Until then it keeps your current model and says why. The same report is saved as `.llm-route-audit/report.html`. Tune the rules with `--target` and `--min-samples`.
+For each task type, the report recommends the **cheapest option that keeps at least 95% of the original's pass rate**, and only once that option has **at least 10 graded answers**. Until then it keeps your current model and says why. Pass rates and costs both come with a 95% range, so you can see how sure each number is. The same report is saved as `.llm-route-audit/report.html`. Tune the rules with `--target` and `--min-samples`.
 
 **5. Export the policy**
 
@@ -291,7 +309,7 @@ Only the requests you choose to replay, sent to the providers you configure. Log
 Treat it as one signal. Exact checks come first and settle formats and facts for free. The judge sees each pair in both orders, and the report shows how often its two verdicts agree. Use a strong judge model, and spot-check `.llm-route-audit/grades.jsonl`.
 
 **How many requests do I need?**
-At least 10 graded answers per task type before anything is recommended, and 30 or more for confident numbers. The report shows a 95% range for every pass rate.
+At least 10 graded answers per task type before anything is recommended, and 30 or more for confident numbers. The report shows a 95% range for every pass rate and every cost.
 
 **Does it handle agents and tool calls?**
 Yes, step by step: each step is replayed with its real history and the tool calls are compared with the original. See [Agents](#agents). Running sessions against your live tools is not supported.
