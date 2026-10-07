@@ -1,6 +1,6 @@
 [project]
 name = "llm-route-audit"
-version = "0.0.1"
+version = "0.1.0"
 description = "Find out whether LLM model routing saves money without hurting quality, on your own traffic."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,7 +9,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Muhammad Idnan" }]
 keywords = ["llm", "model-routing", "llm-router", "llm-evaluation", "cost-optimization"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -24,6 +24,12 @@ dependencies = [
     "pyyaml>=6.0",
     "typer>=0.12",
 ]
+
+[project.urls]
+Homepage = "https://github.com/good2idnan/llm-route-audit"
+Repository = "https://github.com/good2idnan/llm-route-audit"
+Issues = "https://github.com/good2idnan/llm-route-audit/issues"
+Changelog = "https://github.com/good2idnan/llm-route-audit/blob/main/CHANGELOG.md"
 
 [project.scripts]
 routeaudit = "routeaudit.cli:app"
@@ -40,6 +46,19 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/routeaudit"]
+
+# List sdist contents explicitly so local-only files (notes, .env, results) never ship.
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/routeaudit",
+    "tests",
+    "examples",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
 
 [tool.ruff]
 line-length = 100

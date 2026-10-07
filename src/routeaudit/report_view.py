@@ -295,3 +295,100 @@ def render_html(report: Report, source: str) -> str:
     )
     out.append("</main></body></html>")
     return "\n".join(out)
+
+
+# --- Standalone SVG (for READMEs and slides) --------------------------------------------------
+
+FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif'
+SVG_STYLE = f"""
+.bg{{fill:#ffffff;stroke:#d5dde5}}
+.title{{font:600 17px {FONT};fill:#15202b}}
+.sub{{font:12.5px {FONT};fill:#56636f}}
+.tick{{font:11.5px {FONT};fill:#56636f}}
+.grid{{stroke:#e6ebf0}}
+.axis{{stroke:#8a96a3}}
+.dot{{fill:#ffffff;stroke:#56636f;stroke-width:2.5}}
+.dot.current{{fill:#56636f}}
+.dot.policy{{fill:#1d5c96;stroke:#1d5c96}}
+.num{{font:600 11px {FONT};fill:#15202b}}
+.num.inv{{fill:#ffffff}}
+.legend{{font:600 13px {FONT};fill:#15202b}}
+.legend-sub{{font:12px {FONT};fill:#56636f}}
+"""
+
+
+def short_name(name: str) -> str:
+    """Drop provider prefixes for display: 'openrouter/anthropic/claude-x' -> 'claude-x'."""
+    return " ".join(part.rsplit("/", 1)[-1] for part in name.split(" "))
+
+
+def render_svg(report: Report, title: str, subtitle: str = "") -> str:
+    """A self-contained chart with fixed colours, so it renders anywhere, including GitHub."""
+    width, height = 780, 400
+    left, right, top, bottom = 70, 450, 80, 330
+    strategies = report.strategies
+    points = [s for s in strategies if s.quality is not None and s.cost_ratio is not None]
+    x_max = max([1.2, *(s.cost_ratio * 1.1 for s in points)])
+
+    def x(v: float) -> float:
+        return left + (right - left) * v / x_max
+
+    def y(v: float) -> float:
+        return bottom - (bottom - top) * v
+
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}" role="img" aria-label="{_e(title)}">',
+        f"<style>{SVG_STYLE}</style>",
+        f'<rect class="bg" x="0.5" y="0.5" width="{width - 1}" height="{height - 1}" rx="10"/>',
+        f'<text class="title" x="24" y="34">{_e(title)}</text>',
+    ]
+    if subtitle:
+        out.append(f'<text class="sub" x="24" y="55">{_e(subtitle)}</text>')
+    for q in (0, 0.25, 0.5, 0.75, 1):
+        out.append(f'<line class="grid" x1="{left}" x2="{right}" y1="{y(q):.1f}" y2="{y(q):.1f}"/>')
+        out.append(
+            f'<text class="tick" x="{left - 8}" y="{y(q) + 4:.1f}" text-anchor="end">{q:.0%}</text>'
+        )
+    step = 0.25 if x_max <= 1.5 else 0.5
+    tick = 0.0
+    while tick <= x_max + 1e-9:
+        out.append(
+            f'<text class="tick" x="{x(tick):.1f}" y="{bottom + 18}" '
+            f'text-anchor="middle">{tick:.0%}</text>'
+        )
+        tick += step
+    out += [
+        f'<line class="axis" x1="{left}" x2="{right}" y1="{bottom}" y2="{bottom}"/>',
+        f'<line class="axis" x1="{left}" x2="{left}" y1="{top}" y2="{bottom}"/>',
+        f'<text class="tick" x="{(left + right) / 2}" y="{bottom + 40}" '
+        'text-anchor="middle">Cost compared with today</text>',
+        f'<text class="tick" x="22" y="{(top + bottom) / 2}" text-anchor="middle" '
+        f'transform="rotate(-90 22 {(top + bottom) / 2})">Quality (pass rate)</text>',
+    ]
+    legend_y = top + 6
+    for number, s in enumerate(strategies, start=1):
+        kind = "policy" if number == len(strategies) else "current" if number == 1 else ""
+        inv = " inv" if kind else ""
+        if s.quality is not None and s.cost_ratio is not None:
+            cx, cy = x(s.cost_ratio), y(s.quality)
+            out.append(f'<circle class="dot {kind}" cx="{cx:.1f}" cy="{cy:.1f}" r="10"/>')
+            out.append(
+                f'<text class="num{inv}" x="{cx:.1f}" y="{cy + 4:.1f}" '
+                f'text-anchor="middle">{number}</text>'
+            )
+        lx = 486
+        out.append(f'<circle class="dot {kind}" cx="{lx}" cy="{legend_y - 4}" r="10"/>')
+        out.append(
+            f'<text class="num{inv}" x="{lx}" y="{legend_y}" text-anchor="middle">{number}</text>'
+        )
+        out.append(
+            f'<text class="legend" x="{lx + 20}" y="{legend_y}">{_e(short_name(s.name))}</text>'
+        )
+        out.append(
+            f'<text class="legend-sub" x="{lx + 20}" y="{legend_y + 17}">'
+            f"quality {_ratio(s.quality)}, cost {_ratio(s.cost_ratio)}</text>"
+        )
+        legend_y += 50
+    out.append("</svg>")
+    return "\n".join(out)

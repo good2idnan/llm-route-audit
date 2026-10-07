@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 400" width="780" height="400" role="img" aria-label="Per-task routing vs. one cheaper model">
+<style>
+.bg{fill:#ffffff;stroke:#d5dde5}
+.title{font:600 17px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#15202b}
+.sub{font:12.5px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#56636f}
+.tick{font:11.5px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#56636f}
+.grid{stroke:#e6ebf0}
+.axis{stroke:#8a96a3}
+.dot{fill:#ffffff;stroke:#56636f;stroke-width:2.5}
+.dot.current{fill:#56636f}
+.dot.policy{fill:#1d5c96;stroke:#1d5c96}
+.num{font:600 11px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#15202b}
+.num.inv{fill:#ffffff}
+.legend{font:600 13px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#15202b}
+.legend-sub{font:12px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#56636f}
+</style>
+<rect class="bg" x="0.5" y="0.5" width="779" height="399" rx="10"/>
+<text class="title" x="24" y="34">Per-task routing vs. one cheaper model</text>
+<text class="sub" x="24" y="55">Demo: 5 requests from the synthetic sample log, 1 answer per task</text>
+<line class="grid" x1="70" x2="450" y1="330.0" y2="330.0"/>
+<text class="tick" x="62" y="334.0" text-anchor="end">0%</text>
+<line class="grid" x1="70" x2="450" y1="267.5" y2="267.5"/>
+<text class="tick" x="62" y="271.5" text-anchor="end">25%</text>
+<line class="grid" x1="70" x2="450" y1="205.0" y2="205.0"/>
+<text class="tick" x="62" y="209.0" text-anchor="end">50%</text>
+<line class="grid" x1="70" x2="450" y1="142.5" y2="142.5"/>
+<text class="tick" x="62" y="146.5" text-anchor="end">75%</text>
+<line class="grid" x1="70" x2="450" y1="80.0" y2="80.0"/>
+<text class="tick" x="62" y="84.0" text-anchor="end">100%</text>
+<text class="tick" x="70.0" y="348" text-anchor="middle">0%</text>
+<text class="tick" x="149.2" y="348" text-anchor="middle">25%</text>
+<text class="tick" x="228.3" y="348" text-anchor="middle">50%</text>
+<text class="tick" x="307.5" y="348" text-anchor="middle">75%</text>
+<text class="tick" x="386.7" y="348" text-anchor="middle">100%</text>
+<line class="axis" x1="70" x2="450" y1="330" y2="330"/>
+<line class="axis" x1="70" x2="70" y1="80" y2="330"/>
+<text class="tick" x="260.0" y="370" text-anchor="middle">Cost compared with today</text>
+<text class="tick" x="22" y="205.0" text-anchor="middle" transform="rotate(-90 22 205.0)">Quality (pass rate)</text>
+<circle class="dot current" cx="386.7" cy="80.0" r="10"/>
+<text class="num inv" x="386.7" y="84.0" text-anchor="middle">1</text>
+<circle class="dot current" cx="486" cy="82" r="10"/>
+<text class="num inv" x="486" y="86" text-anchor="middle">1</text>
+<text class="legend" x="506" y="86">Current setup (as logged)</text>
+<text class="legend-sub" x="506" y="103">quality 100%, cost 100%</text>
+<circle class="dot " cx="131.5" cy="186.2" r="10"/>
+<text class="num" x="131.5" y="190.2" text-anchor="middle">2</text>
+<circle class="dot " cx="486" cy="132" r="10"/>
+<text class="num" x="486" y="136" text-anchor="middle">2</text>
+<text class="legend" x="506" y="136">Always claude-haiku-4.5</text>
+<text class="legend-sub" x="506" y="153">quality 58%, cost 19%</text>
+<circle class="dot " cx="262.7" cy="136.2" r="10"/>
+<text class="num" x="262.7" y="140.2" text-anchor="middle">3</text>
+<circle class="dot " cx="486" cy="182" r="10"/>
+<text class="num" x="486" y="186" text-anchor="middle">3</text>
+<text class="legend" x="506" y="186">Always claude-sonnet-5.5 @ low</text>
+<text class="legend-sub" x="506" y="203">quality 78%, cost 61%</text>
+<circle class="dot policy" cx="151.7" cy="80.0" r="10"/>
+<text class="num inv" x="151.7" y="84.0" text-anchor="middle">4</text>
+<circle class="dot policy" cx="486" cy="232" r="10"/>
+<text class="num inv" x="486" y="236" text-anchor="middle">4</text>
+<text class="legend" x="506" y="236">routeaudit policy</text>
+<text class="legend-sub" x="506" y="253">quality 100%, cost 26%</text>
+</svg>

@@ -157,3 +157,35 @@ def test_judge_agreement_is_counted_from_grades():
     report = build_report(records, results, grades, PRICES)
     assert (report.judged, report.judge_agreed) == (2, 1)
     assert "Judge consistency" in render_text(report)
+
+
+def test_standalone_svg_has_fixed_colours_and_parses():
+    import xml.etree.ElementTree as ET
+
+    from routeaudit.report_view import render_svg, short_name
+
+    svg = render_svg(build_report(*scenario(), PRICES), title="Demo", subtitle="tiny sample")
+    ET.fromstring(svg)  # valid XML
+    assert "var(--" not in svg  # GitHub can't resolve CSS variables inside images
+    assert "routeaudit policy" in svg
+    assert short_name("Always openrouter/anthropic/claude-haiku-4.5") == "Always claude-haiku-4.5"
+
+
+def test_demo_results_in_the_repo_still_load():
+    from pathlib import Path
+
+    from routeaudit.costs import load_prices
+    from routeaudit.ingest.jsonl import load_jsonl
+    from routeaudit.replay import load_results
+    from routeaudit.report import load_grades
+
+    root = Path(__file__).resolve().parent.parent
+    report = build_report(
+        load_jsonl(root / "examples" / "sample_logs.jsonl").records,
+        load_results(root / "examples" / "demo" / "replay.jsonl"),
+        load_grades(root / "examples" / "demo" / "grades.jsonl"),
+        load_prices(),
+        min_samples=1,
+    )
+    assert len(report.tasks) == 5
+    assert report.policy.quality == 1.0
