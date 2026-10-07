@@ -333,6 +333,10 @@ def policy_yaml(report: Report) -> str:
             fields.append(f"effort: {c.effort}")
         if c.label != ORIGINAL and c.provider:
             fields.append(f"provider: {c.provider}")
+        if c.label != ORIGINAL and c.pass_rate is not None:
+            # What the audit measured, so `routeaudit monitor` can check it still holds.
+            fields.append(f"reference: {json.dumps(t.original.model)}")
+            fields.append(f"expected_pass_rate: {c.pass_rate:.3f}")
         evidence = t.reason
         if c.label != ORIGINAL and c.pass_rate is not None and c.cost_ratio is not None:
             evidence += f"; pass {c.pass_rate:.0%} on {c.graded}, cost {c.cost_ratio:.0%}"

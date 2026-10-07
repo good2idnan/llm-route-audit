@@ -47,18 +47,20 @@ llm-route-audit is not a router. It measures whether routing pays off, and can t
 ## How it works
 
 ```
-your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ report ─▶ export policy
+your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ report ─▶ export policy ─▶ monitor
 ```
 
 | Command | What it does |
 |---|---|
-| `routeaudit import` | Convert LiteLLM logs into routeaudit's log format |
+| `routeaudit import` | Convert LiteLLM, Langfuse or OpenTelemetry logs into routeaudit's log format |
 | `routeaudit validate` | Check a log file |
 | `routeaudit analyze` | Show what your traffic costs today, by task type and model |
 | `routeaudit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenRouter, Ollama) |
 | `routeaudit grade` | Compare every answer with the original: exact checks, then an AI judge |
 | `routeaudit report` | Recommend a model per task type, with cost and quality for each strategy |
 | `routeaudit export` | Write the policy as YAML or as a LiteLLM proxy config |
+| `routeaudit monitor` | After you switch, check that routed traffic still meets the audited quality |
+| `routeaudit check-model` | Test a newly released model on your last audit's sample and see what it would change |
 
 ## Audit your own traffic
 
@@ -112,6 +114,35 @@ uv run routeaudit export examples/sample_logs.jsonl --format litellm --out litel
 
 The LiteLLM config gives each task type its own model alias, such as `route/draft_reply`. Your app sends each request to its task's alias, and LiteLLM forwards it to the chosen model with the right effort setting.
 
+**6. Keep watching after you switch**
+
+Models change and traffic drifts, so a cheaper route that passed the audit can get worse later. Once the policy is live, point `monitor` at fresh production logs:
+
+```bash
+uv run routeaudit monitor production-logs.jsonl --policy routing-policy.yaml --config examples/grading.yaml
+```
+
+For each task that switched to a cheaper model, it samples recent requests (`--per-task 20`) and replays them on the model the route replaced. It then grades the production answer against that reference answer and compares the pass rate with what the audit measured:
+
+| Status | Meaning |
+|---|---|
+| `OK` | At or above the audited pass rate, minus a small tolerance (`--tolerance 0.05`) |
+| `WAIT` | No problem so far, but too few checks to be sure (`--min-checks 10`) |
+| `WARN` | Below the line, but the sample can't rule out bad luck yet |
+| `ALERT` | 95% sure quality dropped. The command exits with code 2, so cron or CI can flag it. |
+
+Monitoring uses the same cost estimate, confirmation, `--max-spend` and cache as replay.
+
+**7. Test a new model in one command**
+
+When a new model comes out, test it on the same requests as your last audit:
+
+```bash
+uv run routeaudit check-model examples/sample_logs.jsonl -m claude-sonnet-5-5 --effort low --config examples/grading.yaml
+```
+
+It replays and grades only the new model, adds its results to your audit files, and shows which tasks it would take over and how projected savings change. To test the "one strong model at lower effort" alternative, check your current model at `--effort low`.
+
 ## Providers and spending
 
 Name each candidate (and the judge) after where it runs, and put the key in a `.env` file:
@@ -132,13 +163,15 @@ Three spending controls work on both `replay` and `grade`:
 
 ## Logs
 
-**Using LiteLLM?** Import the JSON or JSONL files from its logging callbacks (one file or a folder):
+**Already logging somewhere?** Import from the tool you use. Point `import` at one file or a folder:
 
-```bash
-uv run routeaudit import litellm-logs/ --out logs.jsonl
-```
+| Source | Command | Task type comes from |
+|---|---|---|
+| [LiteLLM](https://github.com/BerriAI/litellm) logging callbacks (JSON/JSONL) | `routeaudit import litellm-logs/ --format litellm` | request tag `task:<name>` |
+| [Langfuse](https://langfuse.com) observations (UI export or `/api/public/v2/observations`) | `routeaudit import observations.json --format langfuse` | trace tag `task:<name>`, or `--task-from-name` |
+| [OpenTelemetry](https://opentelemetry.io) GenAI spans (OTLP JSON, e.g. the Collector's file exporter) | `routeaudit import traces.jsonl --format otel` | span attribute `task_type` (`--task-attribute`) |
 
-Tag requests in LiteLLM with `task:<name>`, for example `task:classify_ticket`, to get a per-task report. Requests that can't be replayed faithfully yet are skipped and counted: failed calls, cache hits, images and tool calls. API keys and other metadata are not copied.
+Only real model calls are imported. Requests that can't be replayed faithfully yet are skipped and counted: failed calls, cache hits, images and tool calls. For OpenTelemetry, turn on GenAI message capture so the spans include the prompts and answers. API keys and other metadata are not copied.
 
 **Writing your own logs?** Use one JSON object per line:
 

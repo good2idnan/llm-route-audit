@@ -16,6 +16,14 @@ from routeaudit import __version__
 from routeaudit.analyze import UNLABELLED, build_profile
 from routeaudit.cache import ResultCache
 from routeaudit.candidates import Candidate, Effort, load_candidates
+from routeaudit.checkmodel import (
+    compare,
+    merge_grades,
+    merge_results,
+    render_check,
+    sample_records,
+    write_grade_dicts,
+)
 from routeaudit.costs import PriceTable, load_prices
 from routeaudit.display import (
     INDENT,
@@ -26,13 +34,40 @@ from routeaudit.display import (
     render_replay,
     usd,
 )
-from routeaudit.grading.grade import load_config, plan_grades, run_judges, write_grades
+from routeaudit.grading.grade import (
+    judge_upper_bound,
+    load_config,
+    plan_grades,
+    run_judges,
+    write_grades,
+)
+from routeaudit.ingest.common import DEFAULT_TASK_TAG_PREFIX, write_records
 from routeaudit.ingest.jsonl import LoadResult, load_jsonl
-from routeaudit.ingest.litellm import DEFAULT_TASK_TAG_PREFIX, import_litellm, write_records
+from routeaudit.ingest.langfuse import import_langfuse
+from routeaudit.ingest.litellm import import_litellm
+from routeaudit.ingest.otel import DEFAULT_TASK_ATTRIBUTE, import_otel
+from routeaudit.monitor import (
+    DEFAULT_MIN_CHECKS,
+    DEFAULT_PER_TASK,
+    DEFAULT_TOLERANCE,
+    assess,
+    grading_inputs,
+    plan_monitor,
+    render_monitor,
+)
+from routeaudit.policy import load_policy
 from routeaudit.providers import get_provider
 from routeaudit.providers.openrouter import fetch_prices as fetch_openrouter_prices
 from routeaudit.records import LogRecord
-from routeaudit.replay import estimate, load_results, logged_cost, run_replay, write_results
+from routeaudit.replay import (
+    completion_cost,
+    estimate,
+    load_results,
+    logged_cost,
+    run_replay,
+    worst_case_cost,
+    write_results,
+)
 from routeaudit.report import (
     DEFAULT_MIN_SAMPLES,
     DEFAULT_TARGET,
@@ -43,6 +78,7 @@ from routeaudit.report import (
     policy_yaml,
 )
 from routeaudit.report_view import render_html, render_text
+from routeaudit.runner import execute
 from routeaudit.sampling import stratified_sample
 
 app = typer.Typer(
@@ -481,6 +517,15 @@ def export(
 
 class ImportFormat(StrEnum):
     litellm = "litellm"
+    langfuse = "langfuse"
+    otel = "otel"
+
+
+TASK_TIPS = {
+    ImportFormat.litellm: 'Tag requests in LiteLLM with "{prefix}<name>"',
+    ImportFormat.langfuse: 'Tag traces in Langfuse with "{prefix}<name>", or use --task-from-name',
+    ImportFormat.otel: 'Set a "{attribute}" attribute on each GenAI span',
+}
 
 
 @app.command("import")
@@ -491,18 +536,36 @@ def import_logs(
     ],
     fmt: Annotated[
         ImportFormat,
-        typer.Option("--format", help="Where the logs come from."),
+        typer.Option(
+            "--format",
+            help="Where the logs come from: litellm (logging callbacks), langfuse "
+            "(observations export or API), otel (OTLP JSON with GenAI spans).",
+        ),
     ] = ImportFormat.litellm,
     out: Annotated[
         Path, typer.Option(help="Where to write the routeaudit log file (JSONL).")
     ] = Path("logs.jsonl"),
     task_tag_prefix: Annotated[
         str,
-        typer.Option(help="Request tags starting with this set the task type, e.g. task:support."),
+        typer.Option(help="LiteLLM/Langfuse: tags starting with this set the task type."),
     ] = DEFAULT_TASK_TAG_PREFIX,
+    task_from_name: Annotated[
+        bool,
+        typer.Option(help="Langfuse: use each generation's name as its task type."),
+    ] = False,
+    task_attribute: Annotated[
+        str, typer.Option(help="OpenTelemetry: span attribute that holds the task type.")
+    ] = DEFAULT_TASK_ATTRIBUTE,
 ) -> None:
-    """Convert logs from another tool (LiteLLM) into routeaudit's log format."""
-    result = import_litellm(source, task_tag_prefix=task_tag_prefix)
+    """Convert logs from LiteLLM, Langfuse or OpenTelemetry into routeaudit's log format."""
+    if fmt is ImportFormat.langfuse:
+        result = import_langfuse(source, task_tag_prefix, task_from_name)
+    elif fmt is ImportFormat.otel:
+        result = import_otel(source, task_attribute)
+    else:
+        result = import_litellm(source, task_tag_prefix=task_tag_prefix)
+
+    tasks: Counter = Counter()
     if not result.records:
         typer.echo("No usable requests found.", err=True)
     else:
@@ -514,10 +577,315 @@ def import_logs(
         typer.echo(f"Skipped {sum(result.skipped.values())}:")
         for reason, n in result.skipped.most_common():
             typer.echo(f"{INDENT}{n} x {reason}")
-    if result.records and tasks.get(UNLABELLED):
+    if tasks.get(UNLABELLED):
+        tip = TASK_TIPS[fmt].format(prefix=task_tag_prefix, attribute=task_attribute)
         typer.echo(
-            f"Tip: {tasks[UNLABELLED]} requests have no task type. Tag requests in LiteLLM "
-            f'with "{task_tag_prefix}<name>" to get a per-task report.'
+            f"Tip: {tasks[UNLABELLED]} requests have no task type. {tip} to get a per-task report."
         )
     if not result.records:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def monitor(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Production logs recorded after you adopted the policy.",
+        ),
+    ],
+    policy_path: Annotated[
+        Path,
+        typer.Option(
+            "--policy",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Policy written by `routeaudit export` (YAML format).",
+        ),
+    ],
+    config: Annotated[
+        Path | None,
+        typer.Option(exists=True, dir_okay=False, readable=True, help="Grading rules (YAML)."),
+    ] = None,
+    reference_model: Annotated[
+        str | None,
+        typer.Option(help="Model to compare against. Defaults to each route's reference."),
+    ] = None,
+    judge_model: Annotated[str | None, typer.Option(help="Judge model.")] = None,
+    judge_effort: Annotated[Effort | None, typer.Option(help="Judge effort level.")] = None,
+    judge_max_tokens: Annotated[
+        int | None, typer.Option(min=1, help="Most tokens the judge may write per verdict.")
+    ] = None,
+    per_task: Annotated[
+        int, typer.Option(min=1, help="Production requests to check per routed task.")
+    ] = DEFAULT_PER_TASK,
+    seed: Annotated[int, typer.Option(help="Picks the requests. Same seed, same pick.")] = 0,
+    tolerance: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="How far below the audited pass rate is acceptable."),
+    ] = DEFAULT_TOLERANCE,
+    min_checks: Annotated[
+        int, typer.Option(min=1, help="Checks needed before a task can be called OK.")
+    ] = DEFAULT_MIN_CHECKS,
+    prices: PricesOpt = None,
+    out: Annotated[Path, typer.Option(help="Where to save the grades (JSONL).")] = WORK_DIR
+    / "monitor.jsonl",
+    cache_path: Annotated[
+        Path, typer.Option("--cache", help="Cache of answers already paid for (SQLite).")
+    ] = WORK_DIR / "cache.sqlite",
+    concurrency: Annotated[int, typer.Option(min=1, max=32, help="Calls at the same time.")] = 4,
+    budget: Annotated[
+        float | None,
+        typer.Option(min=0, help="Don't start if the estimate is above this many USD."),
+    ] = None,
+    max_spend: MaxSpendOpt = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show the plan and cost estimate, then stop.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
+    ] = False,
+) -> None:
+    """Check that routed traffic still meets the quality the audit measured.
+
+    Exits with code 2 when a task's quality has dropped, so it can run from cron or CI.
+    """
+    records = _load_records(path)
+    try:
+        policy = load_policy(policy_path)
+        rules = load_config(config)
+        if judge_model:
+            rules.judge.model = judge_model
+            rules.judge.provider = None
+        if judge_effort:
+            rules.judge.effort = judge_effort
+        if judge_max_tokens:
+            rules.judge.max_tokens = judge_max_tokens
+        judge = rules.judge.candidate()
+        plan = plan_monitor(records, policy, per_task, seed, reference_model)
+    except (yaml.YAMLError, ValidationError) as e:
+        typer.echo(f"Could not use the policy or settings: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if not plan.checks:
+        typer.echo("Nothing to check:")
+        for task, why in plan.not_checked.items():
+            typer.echo(f"{INDENT}- {task}: {why}")
+        if not any(r.switched for r in policy.routes.values()):
+            typer.echo(
+                "The policy has no switched routes with an audited pass rate. Re-export it "
+                "with this version of routeaudit."
+            )
+        return
+
+    price_table = _prices(prices, [c.reference for c in plan.checks] + [judge])
+    cache = ResultCache(cache_path)
+    try:
+        shadow_cost, judge_cost = plan.estimate_cost(price_table, rules, judge)
+        tasks = sorted({c.task for c in plan.checks})
+        typer.echo(
+            f"Monitor plan: {len(plan.checks)} production answers from {len(tasks)} routed "
+            f"tasks ({', '.join(tasks)})"
+        )
+        typer.echo(
+            f"{INDENT}Shadow answers from the reference model: est. "
+            f"{usd(shadow_cost) if shadow_cost is not None else 'unknown'}"
+        )
+        typer.echo(
+            f"{INDENT}Judge ({judge.label}): up to "
+            f"{usd(judge_cost) if judge_cost is not None else 'unknown'}"
+        )
+        typer.echo("")
+        if dry_run:
+            typer.echo("Dry run: nothing was sent.")
+            return
+        total = None if shadow_cost is None or judge_cost is None else shadow_cost + judge_cost
+        _confirm_spend(total, budget, yes)
+
+        shadow_jobs = plan.shadow_jobs()
+        execution = execute(
+            shadow_jobs,
+            cache,
+            get_provider,
+            concurrency=concurrency,
+            on_progress=_progress("shadow answers"),
+            max_spend=max_spend,
+            worst_case=lambda job: worst_case_cost(price_table, job),
+            actual_cost=lambda job, c: completion_cost(price_table, job.candidate, c),
+        )
+        shadow_spent = sum(
+            completion_cost(price_table, job.candidate, o.completion) or 0.0
+            for job, o in zip(shadow_jobs, execution.outcomes, strict=True)
+            if o.completion is not None and not o.cached
+        )
+        references, answers, failed = grading_inputs(plan, execution)
+        run = run_judges(
+            plan_grades(references, answers, rules),
+            cache,
+            price_table,
+            provider_for=get_provider,
+            concurrency=concurrency,
+            on_progress=_progress("judge calls"),
+            max_spend=None if max_spend is None else max(0.0, max_spend - shadow_spent),
+        )
+    finally:
+        cache.close()
+
+    write_grades(out, run.grades)
+    health = assess(run.grades, plan, tolerance=tolerance, min_checks=min_checks)
+    typer.echo(
+        render_monitor(
+            health,
+            plan,
+            source=path.as_posix(),
+            spent=shadow_spent + run.judge_spent,
+            shadow_failed=failed,
+            out_path=out.as_posix(),
+        )
+    )
+    if execution.stopped_reason or run.stopped_reason:
+        raise typer.Exit(code=1)
+    if any(h.status == "ALERT" for h in health):
+        raise typer.Exit(code=2)
+
+
+@app.command("check-model")
+def check_model(
+    path: LogsArg,
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model", "-m", help="The model to test, e.g. openrouter/anthropic/claude-sonnet-5.5."
+        ),
+    ],
+    effort: Annotated[Effort | None, typer.Option(help="Effort level for the model.")] = None,
+    max_tokens: Annotated[
+        int, typer.Option(min=1, help="Most tokens the model may write per answer.")
+    ] = 16_000,
+    replay_path: ReplayOpt = WORK_DIR / "replay.jsonl",
+    grades_path: GradesOpt = WORK_DIR / "grades.jsonl",
+    config: Annotated[
+        Path | None,
+        typer.Option(exists=True, dir_okay=False, readable=True, help="Grading rules (YAML)."),
+    ] = None,
+    judge_model: Annotated[str | None, typer.Option(help="Judge model.")] = None,
+    judge_effort: Annotated[Effort | None, typer.Option(help="Judge effort level.")] = None,
+    judge_max_tokens: Annotated[
+        int | None, typer.Option(min=1, help="Most tokens the judge may write per verdict.")
+    ] = None,
+    prices: PricesOpt = None,
+    target: TargetOpt = DEFAULT_TARGET,
+    min_samples: MinSamplesOpt = DEFAULT_MIN_SAMPLES,
+    cache_path: Annotated[
+        Path, typer.Option("--cache", help="Cache of answers already paid for (SQLite).")
+    ] = WORK_DIR / "cache.sqlite",
+    concurrency: Annotated[int, typer.Option(min=1, max=32, help="Calls at the same time.")] = 4,
+    budget: Annotated[
+        float | None,
+        typer.Option(min=0, help="Don't start if the estimate is above this many USD."),
+    ] = None,
+    max_spend: MaxSpendOpt = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show the plan and cost estimate, then stop.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
+    ] = False,
+) -> None:
+    """Test a new model on the same sample as your last audit and show what it would change.
+
+    The new answers and grades are added to the replay and grades files, so later `report`
+    and `export` runs include the new model.
+    """
+    records = _load_records(path)
+    for file, step in ((replay_path, "replay"), (grades_path, "grade")):
+        if not file.exists():
+            typer.echo(f"No {step} results at {file}. Run an audit first.", err=True)
+            raise typer.Exit(code=1)
+    results = load_results(replay_path)
+    grades = load_grades(grades_path)
+    try:
+        candidate = Candidate(model=model, effort=effort, max_tokens=max_tokens)
+        rules = load_config(config)
+        if judge_model:
+            rules.judge.model = judge_model
+            rules.judge.provider = None
+        if judge_effort:
+            rules.judge.effort = judge_effort
+        if judge_max_tokens:
+            rules.judge.max_tokens = judge_max_tokens
+        judge = rules.judge.candidate()
+    except (yaml.YAMLError, ValidationError) as e:
+        typer.echo(f"Could not use these settings: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+    sample = sample_records(records, results)
+    price_table = _prices(prices, [candidate, judge])
+    before = build_report(records, results, grades, price_table, target, min_samples)
+
+    cache = ResultCache(cache_path)
+    try:
+        [replay_estimate] = estimate(sample, [candidate], price_table, cache)
+        judge_estimate = judge_upper_bound(price_table, judge, rules, sample)
+        typer.echo(f"Model check: {candidate.label} on the {len(sample)} requests of your audit")
+        typer.echo(
+            f"{INDENT}Answers: est. "
+            f"{usd(replay_estimate.cost) if replay_estimate.cost is not None else 'unknown'}"
+            f" ({replay_estimate.cached} already cached)"
+        )
+        typer.echo(
+            f"{INDENT}Judge ({judge.label}): up to "
+            f"{usd(judge_estimate) if judge_estimate is not None else 'unknown'}"
+        )
+        typer.echo("")
+        if dry_run:
+            typer.echo("Dry run: nothing was sent.")
+            return
+        total = (
+            None
+            if replay_estimate.cost is None or judge_estimate is None
+            else replay_estimate.cost + judge_estimate
+        )
+        _confirm_spend(total, budget, yes)
+        run = run_replay(
+            sample,
+            [candidate],
+            cache,
+            price_table,
+            provider_for=get_provider,
+            concurrency=concurrency,
+            on_progress=_progress("answers"),
+            max_spend=max_spend,
+        )
+        graded = run_judges(
+            plan_grades(records, run.results, rules),
+            cache,
+            price_table,
+            provider_for=get_provider,
+            concurrency=concurrency,
+            on_progress=_progress("judge calls"),
+            max_spend=None if max_spend is None else max(0.0, max_spend - run.spent),
+        )
+    finally:
+        cache.close()
+
+    merged_results = merge_results(results, run.results)
+    merged_grades = merge_grades(grades, graded.grades)
+    write_results(replay_path, merged_results)
+    write_grade_dicts(grades_path, merged_grades)
+    after = build_report(records, merged_results, merged_grades, price_table, target, min_samples)
+    typer.echo(
+        render_check(
+            candidate.label,
+            compare(before, after, candidate.label),
+            before,
+            after,
+            spent=run.spent + graded.judge_spent,
+        )
+    )
+    if run.stopped_reason or graded.stopped_reason:
         raise typer.Exit(code=1)

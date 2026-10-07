@@ -24,13 +24,22 @@ def seconds(ms: float | None) -> str:
     return "-" if ms is None else f"{ms / 1000:.1f}s"
 
 
-def table(headers: list[str], rows: list[list[str]], text_columns: int = 1) -> list[str]:
-    """The first `text_columns` columns are left-aligned, the rest (numbers) right-aligned."""
+def table(
+    headers: list[str],
+    rows: list[list[str]],
+    text_columns: int = 1,
+    numeric_columns: set[int] | None = None,
+) -> list[str]:
+    """Numbers right-aligned, text left-aligned. By default the first `text_columns` columns
+    are text; pass `numeric_columns` (by index) when text columns also come later."""
     widths = [max([len(h), *(len(r[i]) for r in rows)]) for i, h in enumerate(headers)]
+
+    def right(i: int) -> bool:
+        return i in numeric_columns if numeric_columns is not None else i >= text_columns
 
     def line(cells: list[str]) -> str:
         parts = [
-            c.ljust(w) if i < text_columns else c.rjust(w)
+            c.rjust(w) if right(i) else c.ljust(w)
             for i, (c, w) in enumerate(zip(cells, widths, strict=True))
         ]
         return (INDENT + "  ".join(parts)).rstrip()

@@ -257,6 +257,33 @@ def run_judges(
     return run
 
 
+JUDGE_PROMPT_OVERHEAD_TOKENS = 300
+
+
+def judge_upper_bound(
+    prices: PriceTable, judge: Candidate, config: GradingConfig, records: list[LogRecord]
+) -> float | None:
+    """The most judging could cost for these requests: every answer reaches the judge (two
+    calls each) and answers are about as long as the originals. None if the judge has no price."""
+    total = 0.0
+    for record in records:
+        if not config.rule_for(record.task_type).uses_judge:
+            continue
+        request_tokens = sum(estimate_tokens(m.content) for m in record.conversation())
+        per_call = candidate_cost(
+            prices,
+            judge,
+            input_tokens=request_tokens
+            + 2 * estimate_tokens(record.response)
+            + JUDGE_PROMPT_OVERHEAD_TOKENS,
+            output_tokens=JUDGE_OUTPUT_TOKENS,
+        )
+        if per_call is None:
+            return None
+        total += 2 * per_call
+    return total
+
+
 def write_grades(path: str | Path, grades: list[Grade]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

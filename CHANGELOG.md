@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `routeaudit import --format langfuse`: import Langfuse GENERATION observations from a UI export or the API, with task types from trace tags or generation names.
+- `routeaudit import --format otel`: import OpenTelemetry GenAI spans from OTLP JSON, using the `gen_ai.*` message and usage attributes, with task types from a span attribute.
+- `routeaudit check-model`: test a new model (and effort) on the same sample as the last audit. It adds the results to the audit files and shows which tasks it would take over and how savings change.
+- `routeaudit monitor`: shadow checks after you adopt a policy. It samples production requests on each switched route and replays them on the reference model. It grades the production answer against the reference and reports OK, WAIT, WARN or ALERT for each task. Exits with code 2 on an alert.
+- `routeaudit export` now writes each switched route's reference model and audited pass rate (`reference`, `expected_pass_rate`), which `monitor` checks against.
+
 ## 0.1.0 (2026-10-07)
 
 First public release. It runs the full audit end to end on single-request workloads.
