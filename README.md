@@ -63,6 +63,7 @@ your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ repo
 |---|---|
 | `llm-route-audit import` | Convert LiteLLM, Langfuse or OpenTelemetry logs into llm-route-audit's log format |
 | `llm-route-audit label` | Give requests a task type automatically, if your logs don't have one |
+| `llm-route-audit redact` | Hide private data (emails, phones, cards, secrets, ...) in a copy of your logs |
 | `llm-route-audit validate` | Check a log file |
 | `llm-route-audit analyze` | Show what your traffic costs today, by task type and model |
 | `llm-route-audit replay` | Re-run a sample of requests on candidate models (Anthropic, OpenAI, OpenRouter, Ollama, any OpenAI-compatible server) |
@@ -204,6 +205,23 @@ llm-route-audit label logs.jsonl --out labelled.jsonl --by laya --tasks tasks.ya
 ```
 
 `tasks.yaml` lists each task type with a one-line description (`tasks: {billing: "payments and refunds", ...}`). Requests laya is unsure about (`--min-confidence`) stay unlabelled. The laya extra installs PyTorch and downloads about 800 MB of model weights the first time.
+
+**Private data in your logs?** Clean a copy first and run the audit on that copy, so no private values are sent to any model:
+
+```bash
+llm-route-audit redact logs.jsonl --out safe-logs.jsonl
+```
+
+It hides email addresses, phone numbers, payment cards (checksum-verified), IBANs, ID numbers (US SSN, UK NI), IP addresses, links carrying tokens, API keys and passwords, and dates of birth. It works offline and only prints counts, never the values. Each value becomes a numbered placeholder such as `[EMAIL_1]`, the same in the request and the original answer, so grading stays fair. Choose types and add your own patterns in a YAML file passed with `--rules`:
+
+```yaml
+types: [email, phone, card, secret]   # default: all types
+custom:
+  - name: customer_id
+    pattern: 'CUST-\d{6}'
+```
+
+Names and street addresses are not detected, since they have no fixed pattern. Open the cleaned file and check it before you run an audit.
 
 **Writing your own logs?** Use one JSON object per line:
 

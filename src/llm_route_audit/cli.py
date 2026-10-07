@@ -67,6 +67,7 @@ from llm_route_audit.policy import load_policy
 from llm_route_audit.providers import ProviderError, get_provider
 from llm_route_audit.providers.openrouter import fetch_prices as fetch_openrouter_prices
 from llm_route_audit.records import LogRecord
+from llm_route_audit.redaction import load_redaction_config, redact_record
 from llm_route_audit.replay import (
     completion_cost,
     estimate,
@@ -1092,3 +1093,50 @@ def label(
             else f"laya was less than {min_confidence:.0%} sure or chose none of your tasks"
         )
         typer.echo(f"{counts[UNLABELLED]} requests stayed unlabelled: {hint}.")
+
+
+@app.command()
+def redact(
+    path: LogsArg,
+    out: Annotated[Path, typer.Option(help="Where to write the cleaned log file (JSONL).")],
+    rules: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="YAML file choosing which types to hide and adding your own patterns.",
+        ),
+    ] = None,
+) -> None:
+    """Hide private data (emails, phone numbers, cards, secrets, ...) in a copy of your logs.
+
+    Run the audit on the cleaned copy, so no private values are sent to any model. The
+    private values themselves are never printed.
+    """
+    records = _load_records(path)
+    try:
+        config = load_redaction_config(rules)
+    except (yaml.YAMLError, ValidationError) as e:
+        typer.echo(f"Could not read redaction rules {rules}: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+    active = config.rules()
+    cleaned, totals, changed = [], Counter(), 0
+    for record in records:
+        updated, counts = redact_record(record, active)
+        cleaned.append(updated)
+        totals.update(counts)
+        changed += bool(counts)
+    write_records(out, cleaned)
+
+    typer.echo(f"Checked {len(records)} requests; {changed} contained private data.")
+    if totals:
+        typer.echo("Hidden: " + ", ".join(f"{n} {t.lower()}" for t, n in totals.most_common()))
+    else:
+        typer.echo("Nothing to hide was found.")
+    typer.echo(f"Cleaned copy saved to {out.as_posix()}. Run the audit on that file.")
+    typer.echo(
+        f"{INDENT}Checked types: {', '.join(config.types)}"
+        + (f"; your rules: {', '.join(c.name for c in config.custom)}" if config.custom else "")
+    )
