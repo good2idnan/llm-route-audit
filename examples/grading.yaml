@@ -1,0 +1,36 @@
+# How to grade each task type in examples/sample_logs.jsonl.
+# Exact checks run first and cost nothing. Answers that pass them go to the AI judge
+# when `judge: true`, or when a task has no checks at all.
+judge:
+  model: claude-opus-5-5
+
+tasks:
+  classify_ticket:
+    checks:
+      - type: json
+      - type: match_reference
+        fields: [category, priority]
+
+  extract_invoice:
+    checks:
+      - type: json
+      - type: match_reference
+        fields: [vendor, invoice_number, invoice_date, due_date, currency, total]
+
+  draft_reply:
+    checks:
+      - type: contains
+        values: ["Brightpath Support"]
+    judge: true
+
+  summarize_call:
+    checks:
+      - type: regex
+        pattern: "(?i)action items"
+    judge: true
+
+  review_contract:
+    checks:
+      - type: regex
+        pattern: "(?i)overall risk( rating)?:?\\s*\\**\\s*(low|medium|high)"
+    judge: true

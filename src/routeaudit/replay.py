@@ -1,19 +1,19 @@
 """Replay a sample of logged requests on candidate models and record what each one answers."""
 
 import json
-import time
+import math
 from collections.abc import Callable
-from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from routeaudit.analyze import usage_of
+from routeaudit.analyze import estimate_tokens, usage_of
 from routeaudit.cache import ResultCache, request_key
 from routeaudit.candidates import Candidate
 from routeaudit.costs import PriceTable, UnknownModelError
-from routeaudit.providers.base import Completion, Provider, ProviderError
+from routeaudit.providers.base import Completion, Provider
 from routeaudit.records import LogRecord
+from routeaudit.runner import Job, execute
 
 
 def candidate_cost(
@@ -36,6 +36,38 @@ def candidate_cost(
         )
     except UnknownModelError:
         return 0.0 if candidate.provider == "ollama" else None
+
+
+def completion_cost(
+    prices: PriceTable, candidate: Candidate, completion: Completion
+) -> float | None:
+    """What a call cost: the provider's own figure when it reports one, else from prices."""
+    if completion.cost is not None:
+        return completion.cost
+    return candidate_cost(
+        prices,
+        candidate,
+        input_tokens=completion.input_tokens,
+        output_tokens=completion.output_tokens,
+        cache_read_tokens=completion.cache_read_tokens,
+        cache_write_tokens=completion.cache_write_tokens,
+    )
+
+
+# Token counts estimated from text length can run low, and every message adds a few tokens.
+INPUT_SAFETY_MARGIN = 1.5
+PER_MESSAGE_TOKENS = 20
+
+
+def worst_case_cost(prices: PriceTable, job: Job) -> float | None:
+    """The most a call could cost: generous input estimate plus every allowed output token."""
+    input_tokens = sum(estimate_tokens(m.content) + PER_MESSAGE_TOKENS for m in job.messages)
+    return candidate_cost(
+        prices,
+        job.candidate,
+        input_tokens=math.ceil(input_tokens * INPUT_SAFETY_MARGIN),
+        output_tokens=job.candidate.max_tokens,
+    )
 
 
 def logged_cost(prices: PriceTable, records: list[LogRecord]) -> float | None:
@@ -118,6 +150,7 @@ class ReplayRun:
     results: list[ReplayResult]
     stopped_reason: str | None = None
     disabled: dict[str, str] = field(default_factory=dict)
+    held_back: int = 0
 
     @property
     def spent(self) -> float:
@@ -154,14 +187,7 @@ def _completed(
         output_tokens=completion.output_tokens,
         cache_read_tokens=completion.cache_read_tokens,
         cache_write_tokens=completion.cache_write_tokens,
-        cost=candidate_cost(
-            prices,
-            candidate,
-            input_tokens=completion.input_tokens,
-            output_tokens=completion.output_tokens,
-            cache_read_tokens=completion.cache_read_tokens,
-            cache_write_tokens=completion.cache_write_tokens,
-        ),
+        cost=completion_cost(prices, candidate, completion),
         latency_ms=latency_ms,
         cached=cached,
     )
@@ -175,75 +201,39 @@ def run_replay(
     provider_for: Callable[[str], Provider],
     concurrency: int = 4,
     on_progress: Callable[[int, int], None] | None = None,
+    max_spend: float | None = None,
 ) -> ReplayRun:
-    """Run every (record, candidate) pair, reusing cached answers. Results keep job order."""
-    jobs = [(record, candidate) for candidate in candidates for record in sample]
-    results: dict[int, ReplayResult] = {}
-    pending = []
-    for i, (record, candidate) in enumerate(jobs):
-        key = request_key(candidate, record.conversation())
-        hit = cache.get(key)
-        if hit is None:
-            pending.append((i, record, candidate, key))
+    """Run every (record, candidate) pair, reusing cached answers. Results keep job order.
+
+    With `max_spend`, the run never spends more than that many USD on new calls.
+    """
+    pairs = [(record, candidate) for candidate in candidates for record in sample]
+    execution = execute(
+        [Job(candidate, record.conversation()) for record, candidate in pairs],
+        cache,
+        provider_for,
+        concurrency=concurrency,
+        on_progress=on_progress,
+        max_spend=max_spend,
+        worst_case=lambda job: worst_case_cost(prices, job),
+        actual_cost=lambda job, completion: completion_cost(prices, job.candidate, completion),
+    )
+    results = []
+    for (record, candidate), outcome in zip(pairs, execution.outcomes, strict=True):
+        if outcome.completion is None:
+            results.append(_base(record, candidate, outcome.status, error=outcome.error))
         else:
-            completion, latency = hit
-            results[i] = _completed(record, candidate, completion, latency, prices, cached=True)
-
-    run = ReplayRun(results=[])
-    done, total = len(results), len(jobs)
-    if on_progress:
-        on_progress(done, total)
-    providers = {name: provider_for(name) for name in {c.provider for _, _, c, _ in pending}}
-
-    def call(record: LogRecord, candidate: Candidate) -> tuple[Completion, float] | str:
-        """Runs in a worker thread. Returns the answer, or the reason it was skipped.
-
-        Workers record disabled candidates and fatal stops themselves, so a request already
-        queued behind a failure is skipped instead of failing the same way.
-        """
-        if run.stopped_reason:
-            return run.stopped_reason
-        if candidate.label in run.disabled:
-            return run.disabled[candidate.label]
-        start = time.perf_counter()
-        try:
-            completion = providers[candidate.provider].complete(candidate, record.conversation())
-        except ProviderError as e:
-            if e.disable:
-                run.disabled.setdefault(candidate.label, str(e))
-            if e.fatal and run.stopped_reason is None:
-                run.stopped_reason = str(e)
-            raise
-        return completion, (time.perf_counter() - start) * 1000
-
-    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
-        futures = {pool.submit(call, r, c): (i, r, c, key) for i, r, c, key in pending}
-        for future in as_completed(futures):
-            i, record, candidate, key = futures[future]
-            try:
-                outcome = future.result()
-            except CancelledError:
-                results[i] = _base(record, candidate, "skipped", error=run.stopped_reason)
-            except ProviderError as e:
-                if e.fatal:
-                    for other in futures:
-                        other.cancel()
-                results[i] = _base(record, candidate, "error", error=str(e))
-            else:
-                if isinstance(outcome, str):
-                    results[i] = _base(record, candidate, "skipped", error=outcome)
-                else:
-                    completion, latency = outcome
-                    cache.put(key, candidate, completion, latency)
-                    results[i] = _completed(
-                        record, candidate, completion, latency, prices, cached=False
-                    )
-            done += 1
-            if on_progress:
-                on_progress(done, total)
-
-    run.results = [results[i] for i in range(len(jobs))]
-    return run
+            results.append(
+                _completed(
+                    record,
+                    candidate,
+                    outcome.completion,
+                    outcome.latency_ms,
+                    prices,
+                    outcome.cached,
+                )
+            )
+    return ReplayRun(results, execution.stopped_reason, execution.disabled, execution.held_back)
 
 
 def write_results(path: str | Path, results: list[ReplayResult]) -> None:
@@ -252,3 +242,8 @@ def write_results(path: str | Path, results: list[ReplayResult]) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as f:
         for result in results:
             f.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
+
+
+def load_results(path: str | Path) -> list[ReplayResult]:
+    with Path(path).open(encoding="utf-8") as f:
+        return [ReplayResult(**json.loads(line)) for line in f if line.strip()]

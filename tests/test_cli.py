@@ -152,3 +152,120 @@ def test_replay_writes_answers(tmp_path, monkeypatch):
     again = runner.invoke(app, _replay_args(tmp_path))
     assert again.exit_code == 0
     assert "0 new answers, 30 from cache" in again.output
+
+
+GRADING = SAMPLE.parent / "grading.yaml"
+
+
+class TieJudge:
+    def complete(self, candidate, messages):
+        from routeaudit.providers.base import Completion
+
+        return Completion(text="Same.\nVERDICT: TIE", input_tokens=300, output_tokens=20)
+
+
+def _grade_args(tmp_path, *extra):
+    return [
+        "grade",
+        str(SAMPLE),
+        "--replay",
+        str(tmp_path / "replay.jsonl"),
+        "--config",
+        str(GRADING),
+        "--cache",
+        str(tmp_path / "cache.sqlite"),
+        "--out",
+        str(tmp_path / "grades.jsonl"),
+        *extra,
+    ]
+
+
+def test_grade_needs_a_replay_first(tmp_path):
+    result = runner.invoke(app, _grade_args(tmp_path))
+    assert result.exit_code == 1
+    assert "Run `routeaudit replay` first" in result.output
+
+
+def test_grade_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: EchoProvider())
+    assert runner.invoke(app, _replay_args(tmp_path, "--yes")).exit_code == 0
+
+    # EchoProvider answers "ok": it fails every task's exact checks, so no judge calls are needed.
+    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: pytest.fail("no judge calls"))
+    dry = runner.invoke(app, _grade_args(tmp_path, "--dry-run"))
+    assert dry.exit_code == 0, dry.output
+    assert "Grading plan: 30 replayed answers (+ 10 originals" in dry.output
+    assert "Need the judge: 0 answers" in dry.output
+
+    result = runner.invoke(app, _grade_args(tmp_path))
+    assert result.exit_code == 0, result.output
+    assert "ALL TASKS" in result.output
+    grades = [
+        json.loads(line) for line in (tmp_path / "grades.jsonl").read_text("utf-8").splitlines()
+    ]
+    originals = [g for g in grades if g["candidate"] == "original (as logged)"]
+    assert len(grades) == 40
+    assert {g["outcome"] for g in originals} == {"pass"}
+    assert {g["outcome"] for g in grades if g not in originals} == {"fail"}
+
+
+def test_grade_with_judge(tmp_path, monkeypatch):
+    replay = tmp_path / "replay.jsonl"
+    record = json.loads(SAMPLE.read_text("utf-8").splitlines()[0])
+    replay.write_text(
+        json.dumps(
+            {
+                "record_id": record["id"],
+                "task_type": record["task_type"],
+                "model": "claude-haiku-4-5",
+                "effort": None,
+                "provider": "anthropic",
+                "status": "ok",
+                "response": record["response"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: TieJudge())
+    result = runner.invoke(app, _grade_args(tmp_path, "--yes"))
+    assert result.exit_code == 0, result.output
+    assert "Judge calls to make: 2" in result.output
+    assert "same verdict in both orders for 1 of 1" in result.output
+
+
+def test_report_and_export_after_grading(tmp_path, monkeypatch):
+    monkeypatch.setattr("routeaudit.cli.get_provider", lambda name: EchoProvider())
+    assert runner.invoke(app, _replay_args(tmp_path, "--yes")).exit_code == 0
+    assert runner.invoke(app, _grade_args(tmp_path)).exit_code == 0
+
+    files = [
+        "--replay",
+        str(tmp_path / "replay.jsonl"),
+        "--grades",
+        str(tmp_path / "grades.jsonl"),
+    ]
+    result = runner.invoke(
+        app, ["report", str(SAMPLE), *files, "--html", str(tmp_path / "report.html")]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Recommendation by task type" in result.output
+    assert (tmp_path / "report.html").read_text("utf-8").startswith("<!doctype html>")
+
+    as_json = runner.invoke(
+        app, ["report", str(SAMPLE), *files, "--json", "--html", str(tmp_path / "r.html")]
+    )
+    assert json.loads(as_json.output)["tasks"]
+
+    policy = tmp_path / "policy.yaml"
+    exported = runner.invoke(app, ["export", str(SAMPLE), *files, "--out", str(policy)])
+    assert exported.exit_code == 0
+    assert "routes:" in policy.read_text("utf-8")
+
+
+def test_report_needs_grades_first(tmp_path):
+    result = runner.invoke(
+        app, ["report", str(SAMPLE), "--replay", str(SAMPLE), "--grades", str(tmp_path / "none")]
+    )
+    assert result.exit_code == 1
+    assert "Run `routeaudit grade` first" in result.output

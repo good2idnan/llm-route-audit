@@ -14,6 +14,8 @@ class Completion:
     cache_write_tokens: int = 0
     # "refusal" and "truncated" are kept apart from "ok" so grading can count them.
     status: str = "ok"
+    # What the provider actually charged, when it reports it (OpenRouter does).
+    cost: float | None = None
 
 
 class ProviderError(Exception):

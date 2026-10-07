@@ -13,6 +13,10 @@ def get_provider(name: str) -> Provider:
         from routeaudit.providers.ollama import OllamaProvider
 
         return OllamaProvider()
+    if name == "openrouter":
+        from routeaudit.providers.openrouter import OpenRouterProvider
+
+        return OpenRouterProvider()
     raise ValueError(f"unknown provider '{name}'")
 
 

@@ -2,6 +2,8 @@
 
 import json
 from collections import Counter
+from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -13,13 +15,34 @@ from pydantic import ValidationError
 from routeaudit import __version__
 from routeaudit.analyze import UNLABELLED, build_profile
 from routeaudit.cache import ResultCache
-from routeaudit.candidates import Candidate, load_candidates
+from routeaudit.candidates import Candidate, Effort, load_candidates
 from routeaudit.costs import PriceTable, load_prices
-from routeaudit.display import render_estimate, render_profile, render_replay, usd
+from routeaudit.display import (
+    INDENT,
+    render_estimate,
+    render_grade_plan,
+    render_grades,
+    render_profile,
+    render_replay,
+    usd,
+)
+from routeaudit.grading.grade import load_config, plan_grades, run_judges, write_grades
 from routeaudit.ingest.jsonl import LoadResult, load_jsonl
+from routeaudit.ingest.litellm import DEFAULT_TASK_TAG_PREFIX, import_litellm, write_records
 from routeaudit.providers import get_provider
+from routeaudit.providers.openrouter import fetch_prices as fetch_openrouter_prices
 from routeaudit.records import LogRecord
-from routeaudit.replay import estimate, logged_cost, run_replay, write_results
+from routeaudit.replay import estimate, load_results, logged_cost, run_replay, write_results
+from routeaudit.report import (
+    DEFAULT_MIN_SAMPLES,
+    DEFAULT_TARGET,
+    Report,
+    build_report,
+    load_grades,
+    policy_litellm,
+    policy_yaml,
+)
+from routeaudit.report_view import render_html, render_text
 from routeaudit.sampling import stratified_sample
 
 app = typer.Typer(
@@ -46,6 +69,14 @@ PricesOpt = Annotated[
     ),
 ]
 
+MaxSpendOpt = Annotated[
+    float | None,
+    typer.Option(
+        min=0,
+        help="Hard limit in USD on new API spend. Calls that could break it are not sent.",
+    ),
+]
+
 
 def _load_records(path: Path) -> list[LogRecord]:
     """Load a log file, or print its errors and exit."""
@@ -66,12 +97,24 @@ def _load_records(path: Path) -> list[LogRecord]:
     return result.records
 
 
-def _prices(path: Path | None) -> PriceTable:
+def _prices(path: Path | None, candidates: list[Candidate] = ()) -> PriceTable:
+    """Load prices, then look up any OpenRouter models the table doesn't list."""
     try:
-        return load_prices(path)
+        table = load_prices(path)
     except (yaml.YAMLError, ValidationError) as e:
         typer.echo(f"Could not read prices file {path}: {e}", err=True)
         raise typer.Exit(code=1) from None
+    missing = [c for c in candidates if c.provider == "openrouter" and c.model not in table.models]
+    if missing:
+        try:
+            found = fetch_openrouter_prices([c.api_model for c in missing])
+        except (OSError, ValueError, KeyError) as e:
+            typer.echo(f"Could not fetch OpenRouter prices: {e}", err=True)
+            found = {}
+        for c in missing:
+            if c.api_model in found:
+                table.models[c.model] = found[c.api_model]
+    return table
 
 
 def _candidates(path: Path) -> list[Candidate]:
@@ -80,6 +123,35 @@ def _candidates(path: Path) -> list[Candidate]:
     except (yaml.YAMLError, ValidationError) as e:
         typer.echo(f"Could not read candidates file {path}: {e}", err=True)
         raise typer.Exit(code=1) from None
+
+
+def _confirm_spend(total: float | None, budget: float | None, yes: bool) -> None:
+    """Stop if the estimate is over budget; otherwise ask before spending (unless --yes)."""
+    if budget is not None and (total is None or total > budget):
+        typer.echo(
+            f"The estimate ({usd(total) if total is not None else 'unknown'}) is over "
+            f"your budget of {usd(budget)}. Nothing was sent.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if (total is None or total > 0) and not yes:
+        question = (
+            f"Spend about {usd(total)} on API calls?"
+            if total is not None
+            else "Some models have no price, so the cost is unknown. Continue?"
+        )
+        if not typer.confirm(question, default=False):
+            typer.echo("Cancelled. Nothing was sent.")
+            raise typer.Exit(code=1)
+
+
+def _progress(noun: str) -> Callable[[int, int], None]:
+    def report(done: int, total: int) -> None:
+        step = max(1, total // 10)
+        if done and (done == total or done % step == 0):
+            typer.echo(f"  {done}/{total} {noun}", err=True)
+
+    return report
 
 
 def _version(value: bool) -> None:
@@ -172,6 +244,7 @@ def replay(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Show the plan and cost estimate, then stop.")
     ] = False,
+    max_spend: MaxSpendOpt = None,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
     ] = False,
@@ -179,7 +252,7 @@ def replay(
     """Re-run a sample of your logged requests on cheaper models and save the answers."""
     records = _load_records(path)
     candidate_list = _candidates(candidates)
-    price_table = _prices(prices)
+    price_table = _prices(prices, candidate_list)
     picked = stratified_sample(records, sample, seed=seed)
     cache = ResultCache(cache_path)
     try:
@@ -191,30 +264,9 @@ def replay(
             return
 
         costs = [e.cost for e in estimates]
-        total = None if None in costs else sum(c for c in costs if c is not None)
-        if budget is not None and (total is None or total > budget):
-            typer.echo(
-                f"The estimate ({usd(total) if total is not None else 'unknown'}) is over "
-                f"your budget of {usd(budget)}. Nothing was sent.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        needs_spend = total is None or total > 0
-        if needs_spend and not yes:
-            question = (
-                f"Spend about {usd(total)} on API calls?"
-                if total is not None
-                else "Some models have no price, so the cost is unknown. Continue?"
-            )
-            if not typer.confirm(question, default=False):
-                typer.echo("Cancelled. Nothing was sent.")
-                raise typer.Exit(code=1)
-
-        def progress(done: int, total_jobs: int) -> None:
-            step = max(1, total_jobs // 10)
-            if done and (done == total_jobs or done % step == 0):
-                typer.echo(f"  {done}/{total_jobs} answers", err=True)
-
+        _confirm_spend(
+            None if None in costs else sum(c for c in costs if c is not None), budget, yes
+        )
         run = run_replay(
             picked,
             candidate_list,
@@ -222,7 +274,8 @@ def replay(
             price_table,
             provider_for=get_provider,
             concurrency=concurrency,
-            on_progress=progress,
+            on_progress=_progress("answers"),
+            max_spend=max_spend,
         )
     finally:
         cache.close()
@@ -233,4 +286,238 @@ def replay(
         render_replay(run, picked, logged_cost(price_table, picked), out_path=out.as_posix())
     )
     if run.stopped_reason:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def grade(
+    path: LogsArg,
+    replay_path: Annotated[
+        Path, typer.Option("--replay", help="Answers saved by `routeaudit replay`.")
+    ] = WORK_DIR / "replay.jsonl",
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Grading rules per task type (YAML). Without it, every answer goes to the judge.",
+        ),
+    ] = None,
+    judge_model: Annotated[
+        str | None, typer.Option(help="Judge model, e.g. claude-opus-5-5 or ollama/llama3.2.")
+    ] = None,
+    judge_effort: Annotated[Effort | None, typer.Option(help="Judge effort level.")] = None,
+    judge_max_tokens: Annotated[
+        int | None, typer.Option(min=1, help="Most tokens the judge may write per verdict.")
+    ] = None,
+    prices: PricesOpt = None,
+    out: Annotated[Path, typer.Option(help="Where to save the grades (JSONL).")] = WORK_DIR
+    / "grades.jsonl",
+    cache_path: Annotated[
+        Path, typer.Option("--cache", help="Cache of answers already paid for (SQLite).")
+    ] = WORK_DIR / "cache.sqlite",
+    concurrency: Annotated[
+        int, typer.Option(min=1, max=32, help="Judge calls to send at the same time.")
+    ] = 4,
+    budget: Annotated[
+        float | None,
+        typer.Option(min=0, help="Don't start if the estimate is above this many USD."),
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Run the free checks, show the plan, then stop.")
+    ] = False,
+    max_spend: MaxSpendOpt = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
+    ] = False,
+) -> None:
+    """Grade replayed answers against the originals: exact checks first, then an AI judge."""
+    records = _load_records(path)
+    if not replay_path.exists():
+        typer.echo(f"No replay answers at {replay_path}. Run `routeaudit replay` first.", err=True)
+        raise typer.Exit(code=1)
+    results = load_results(replay_path)
+    try:
+        rules = load_config(config)
+        if judge_model:
+            rules.judge.model = judge_model
+            rules.judge.provider = None
+        if judge_effort:
+            rules.judge.effort = judge_effort
+        if judge_max_tokens:
+            rules.judge.max_tokens = judge_max_tokens
+        plan = plan_grades(records, results, rules)
+    except (yaml.YAMLError, ValidationError) as e:
+        typer.echo(f"Could not use the grading settings: {e}", err=True)
+        raise typer.Exit(code=1) from None
+    price_table = _prices(prices, [plan.judge])
+
+    cache = ResultCache(cache_path)
+    try:
+        cost, calls = plan.estimate_cost(price_table, cache)
+        typer.echo(render_grade_plan(plan, cost, calls))
+        typer.echo("")
+        if dry_run:
+            typer.echo("Dry run: no judge calls were made.")
+            return
+        if calls:
+            _confirm_spend(cost, budget, yes)
+        run = run_judges(
+            plan,
+            cache,
+            price_table,
+            provider_for=get_provider,
+            concurrency=concurrency,
+            on_progress=_progress("judge calls"),
+            max_spend=max_spend,
+        )
+    finally:
+        cache.close()
+
+    write_grades(out, run.grades)
+    typer.echo("")
+    typer.echo(render_grades(run, out_path=out.as_posix()))
+    if run.stopped_reason:
+        raise typer.Exit(code=1)
+
+
+class ExportFormat(StrEnum):
+    yaml = "yaml"
+    litellm = "litellm"
+
+
+ReplayOpt = Annotated[Path, typer.Option("--replay", help="Answers saved by `routeaudit replay`.")]
+GradesOpt = Annotated[Path, typer.Option("--grades", help="Grades saved by `routeaudit grade`.")]
+TargetOpt = Annotated[
+    float,
+    typer.Option(
+        min=0.0, max=1.0, help="Share of the original's pass rate a cheaper option must keep."
+    ),
+]
+MinSamplesOpt = Annotated[
+    int, typer.Option(min=1, help="Graded answers needed before an option can be recommended.")
+]
+
+
+def _build_report(
+    path: Path,
+    replay_path: Path,
+    grades_path: Path,
+    prices: Path | None,
+    target: float,
+    min_samples: int,
+) -> Report:
+    records = _load_records(path)
+    for file, step in ((replay_path, "replay"), (grades_path, "grade")):
+        if not file.exists():
+            typer.echo(f"No {step} results at {file}. Run `routeaudit {step}` first.", err=True)
+            raise typer.Exit(code=1)
+    return build_report(
+        records,
+        load_results(replay_path),
+        load_grades(grades_path),
+        _prices(prices),
+        target=target,
+        min_samples=min_samples,
+    )
+
+
+@app.command()
+def report(
+    path: LogsArg,
+    replay_path: ReplayOpt = WORK_DIR / "replay.jsonl",
+    grades_path: GradesOpt = WORK_DIR / "grades.jsonl",
+    prices: PricesOpt = None,
+    target: TargetOpt = DEFAULT_TARGET,
+    min_samples: MinSamplesOpt = DEFAULT_MIN_SAMPLES,
+    html_out: Annotated[
+        Path, typer.Option("--html", help="Where to save the HTML report.")
+    ] = WORK_DIR / "report.html",
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Compare cost and quality per task and recommend which model to use for each."""
+    result = _build_report(path, replay_path, grades_path, prices, target, min_samples)
+    html_out.parent.mkdir(parents=True, exist_ok=True)
+    html_out.write_text(render_html(result, source=path.as_posix()), encoding="utf-8")
+    if as_json:
+        typer.echo(json.dumps(result.to_dict(), indent=2))
+    else:
+        typer.echo(render_text(result, html_path=html_out.as_posix()))
+
+
+@app.command()
+def export(
+    path: LogsArg,
+    replay_path: ReplayOpt = WORK_DIR / "replay.jsonl",
+    grades_path: GradesOpt = WORK_DIR / "grades.jsonl",
+    prices: PricesOpt = None,
+    target: TargetOpt = DEFAULT_TARGET,
+    min_samples: MinSamplesOpt = DEFAULT_MIN_SAMPLES,
+    out: Annotated[
+        Path | None, typer.Option(help="Write the policy to this file instead of the screen.")
+    ] = None,
+    fmt: Annotated[
+        ExportFormat,
+        typer.Option(
+            "--format",
+            help="yaml: routeaudit's routing table. litellm: a LiteLLM proxy config with one "
+            "model alias per task type.",
+        ),
+    ] = ExportFormat.yaml,
+) -> None:
+    """Write the recommended routing policy, as a YAML table or a LiteLLM config."""
+    result = _build_report(path, replay_path, grades_path, prices, target, min_samples)
+    policy = policy_litellm(result) if fmt is ExportFormat.litellm else policy_yaml(result)
+    if out is None:
+        typer.echo(policy, nl=False)
+    else:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(policy, encoding="utf-8")
+        typer.echo(f"Policy saved to {out.as_posix()}")
+
+
+class ImportFormat(StrEnum):
+    litellm = "litellm"
+
+
+@app.command("import")
+def import_logs(
+    source: Annotated[
+        Path,
+        typer.Argument(exists=True, readable=True, help="Log file or folder of log files."),
+    ],
+    fmt: Annotated[
+        ImportFormat,
+        typer.Option("--format", help="Where the logs come from."),
+    ] = ImportFormat.litellm,
+    out: Annotated[
+        Path, typer.Option(help="Where to write the routeaudit log file (JSONL).")
+    ] = Path("logs.jsonl"),
+    task_tag_prefix: Annotated[
+        str,
+        typer.Option(help="Request tags starting with this set the task type, e.g. task:support."),
+    ] = DEFAULT_TASK_TAG_PREFIX,
+) -> None:
+    """Convert logs from another tool (LiteLLM) into routeaudit's log format."""
+    result = import_litellm(source, task_tag_prefix=task_tag_prefix)
+    if not result.records:
+        typer.echo("No usable requests found.", err=True)
+    else:
+        write_records(out, result.records)
+        tasks = Counter(r.task_type or UNLABELLED for r in result.records)
+        typer.echo(f"Imported {len(result.records)} requests to {out.as_posix()}")
+        typer.echo("Task types: " + ", ".join(f"{t} ({n})" for t, n in tasks.most_common()))
+    if result.skipped:
+        typer.echo(f"Skipped {sum(result.skipped.values())}:")
+        for reason, n in result.skipped.most_common():
+            typer.echo(f"{INDENT}{n} x {reason}")
+    if result.records and tasks.get(UNLABELLED):
+        typer.echo(
+            f"Tip: {tasks[UNLABELLED]} requests have no task type. Tag requests in LiteLLM "
+            f'with "{task_tag_prefix}<name>" to get a per-task report.'
+        )
+    if not result.records:
         raise typer.Exit(code=1)

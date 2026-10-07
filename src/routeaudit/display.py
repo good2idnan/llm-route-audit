@@ -3,6 +3,7 @@
 from collections import Counter
 
 from routeaudit.analyze import UNLABELLED, GroupStats, TrafficProfile, percentile
+from routeaudit.grading.grade import ORIGINAL, GradePlan, GradeRun
 from routeaudit.records import LogRecord
 from routeaudit.replay import CandidateEstimate, ReplayRun
 
@@ -23,13 +24,13 @@ def seconds(ms: float | None) -> str:
     return "-" if ms is None else f"{ms / 1000:.1f}s"
 
 
-def table(headers: list[str], rows: list[list[str]]) -> list[str]:
-    """First column left-aligned, the rest right-aligned."""
+def table(headers: list[str], rows: list[list[str]], text_columns: int = 1) -> list[str]:
+    """The first `text_columns` columns are left-aligned, the rest (numbers) right-aligned."""
     widths = [max([len(h), *(len(r[i]) for r in rows)]) for i, h in enumerate(headers)]
 
     def line(cells: list[str]) -> str:
         parts = [
-            c.ljust(w) if i == 0 else c.rjust(w)
+            c.ljust(w) if i < text_columns else c.rjust(w)
             for i, (c, w) in enumerate(zip(cells, widths, strict=True))
         ]
         return (INDENT + "  ".join(parts)).rstrip()
@@ -189,6 +190,8 @@ def render_replay(
     )
 
     notes = [f"Stopped early: {run.stopped_reason}"] if run.stopped_reason else []
+    if run.held_back:
+        notes.append(f"{run.held_back} answers were not requested, to stay under --max-spend.")
     notes += [f"{label} was skipped after: {reason}" for label, reason in run.disabled.items()]
     errors = Counter(r.error for r in run.results if r.status == "error" and r.error)
     notes += [f"{n} x {message}" for message, n in errors.most_common(3)]
@@ -201,3 +204,89 @@ def render_replay(
 
 def _label(model: str, effort: str | None) -> str:
     return f"{model} @ {effort}" if effort else model
+
+
+def render_grade_plan(plan: GradePlan, cost: float | None, calls: int) -> str:
+    candidates = [g for g in plan.grades if g.candidate != ORIGINAL]
+    by_checks = [g for g in candidates if g.outcome in ("pass", "fail")]
+    unusable = [
+        g for g in candidates if g.outcome == "ungraded" and g.reason != "waiting for judge"
+    ]
+    out = [
+        f"Grading plan: {len(candidates)} replayed answers "
+        f"(+ {len(plan.grades) - len(candidates)} originals checked for reference)",
+        f"{INDENT}Settled by exact checks or replay status: {len(by_checks)} "
+        f"(pass {sum(g.outcome == 'pass' for g in by_checks)}, "
+        f"fail {sum(g.outcome == 'fail' for g in by_checks)})",
+        f"{INDENT}Need the judge: {len(plan.judge_pairs)} answers x 2 orders, "
+        f"judge {plan.judge.label}",
+    ]
+    if unusable:
+        out.append(f"{INDENT}Can't be graded (replay errors or skips): {len(unusable)}")
+    out.append(
+        f"{INDENT}Judge calls to make: {calls}, est. cost "
+        f"{usd(cost) if cost is not None else 'unknown (no price for the judge model)'}"
+    )
+    return "\n".join(out)
+
+
+def render_grades(run: GradeRun, out_path: str) -> str:
+    grades = run.grades
+    lines = [
+        f"Grading finished. Judge spent {usd(run.judge_spent)}.",
+        f"Grades saved to {out_path}",
+        "",
+        "Pass = passed every check and the judge rated it at least as good as the original.",
+        "",
+    ]
+    tasks = sorted({g.task_type or UNLABELLED for g in grades})
+    labels = [ORIGINAL] + list(
+        dict.fromkeys(g.candidate for g in grades if g.candidate != ORIGINAL)
+    )
+
+    def row(task: str, label: str, subset: list) -> list[str]:
+        graded = [g for g in subset if g.outcome != "ungraded"]
+        passed = sum(g.outcome == "pass" for g in graded)
+        votes = Counter(g.judge for g in graded if g.judge)
+        judge = f"{votes['win']}/{votes['tie']}/{votes['loss']}" if votes else "-"
+        rate = pct(passed / len(graded)) if graded else "-"
+        return [task, label, f"{len(graded)}", f"{passed}", rate, judge]
+
+    rows = []
+    for task in tasks:
+        for label in labels:
+            subset = [
+                g for g in grades if (g.task_type or UNLABELLED) == task and g.candidate == label
+            ]
+            if subset:
+                rows.append(row(task, label, subset))
+    for label in labels:
+        rows.append(row("ALL TASKS", label, [g for g in grades if g.candidate == label]))
+    lines += table(
+        ["Task", "Candidate", "Graded", "Pass", "Rate", "Judge W/T/L"], rows, text_columns=2
+    )
+
+    notes = []
+    if run.judged:
+        notes.append(
+            f"The judge gave the same verdict in both orders for {run.agreed} of {run.judged} "
+            f"answers ({pct(run.agreed / run.judged)}). Disagreements count as ties."
+        )
+    failures = Counter(
+        f"{g.candidate} / {g.task_type or UNLABELLED}: {c.name} - {c.detail}"
+        for g in grades
+        if g.candidate != ORIGINAL
+        for c in g.checks
+        if c.passed is False
+    )
+    notes += [f"{n} x {reason}" for reason, n in failures.most_common(5)]
+    ungraded = [g for g in grades if g.outcome == "ungraded"]
+    if ungraded:
+        notes.append(f"{len(ungraded)} answers could not be graded (replay errors or no verdict).")
+    if run.held_back:
+        notes.append(f"{run.held_back} judge calls were not made, to stay under --max-spend.")
+    if run.stopped_reason:
+        notes.append(f"Stopped early: {run.stopped_reason}")
+    if notes:
+        lines += ["", "Notes"] + [f"{INDENT}- {n}" for n in notes]
+    return "\n".join(lines)

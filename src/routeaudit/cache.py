@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS completions (
     cache_write_tokens INTEGER NOT NULL,
     status TEXT NOT NULL,
     latency_ms REAL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    cost REAL
 )
 """
 
@@ -49,23 +50,28 @@ class ResultCache:
             path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path)
         self._db.execute(SCHEMA)
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(completions)")}
+        if "cost" not in columns:  # caches made before provider-reported costs existed
+            self._db.execute("ALTER TABLE completions ADD COLUMN cost REAL")
 
     def get(self, key: str) -> tuple[Completion, float | None] | None:
         row = self._db.execute(
             "SELECT text, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
-            "status, latency_ms FROM completions WHERE key = ?",
+            "status, latency_ms, cost FROM completions WHERE key = ?",
             (key,),
         ).fetchone()
         if row is None:
             return None
-        text, inp, out, cread, cwrite, status, latency = row
-        return Completion(text, inp, out, cread, cwrite, status), latency
+        text, inp, out, cread, cwrite, status, latency, cost = row
+        return Completion(text, inp, out, cread, cwrite, status, cost), latency
 
     def put(
         self, key: str, candidate: Candidate, completion: Completion, latency_ms: float | None
     ) -> None:
         self._db.execute(
-            "INSERT OR REPLACE INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO completions (key, model, effort, text, input_tokens, "
+            "output_tokens, cache_read_tokens, cache_write_tokens, status, latency_ms, "
+            "created_at, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 key,
                 candidate.model,
@@ -78,6 +84,7 @@ class ResultCache:
                 completion.status,
                 latency_ms,
                 datetime.now(UTC).isoformat(),
+                completion.cost,
             ),
         )
         self._db.commit()

@@ -6,10 +6,11 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Provider = Literal["anthropic", "ollama"]
+Provider = Literal["anthropic", "ollama", "openrouter"]
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 OLLAMA_PREFIX = "ollama/"
+OPENROUTER_PREFIX = "openrouter/"
 
 
 class Candidate(BaseModel):
@@ -25,12 +26,14 @@ class Candidate(BaseModel):
         if self.provider is None:
             if self.model.startswith(OLLAMA_PREFIX):
                 self.provider = "ollama"
+            elif self.model.startswith(OPENROUTER_PREFIX):
+                self.provider = "openrouter"
             elif self.model.startswith("claude-"):
                 self.provider = "anthropic"
             else:
                 raise ValueError(
                     f"can't tell which provider serves '{self.model}'. "
-                    "Set provider: anthropic or ollama."
+                    "Set provider: anthropic, openrouter or ollama."
                 )
         if self.provider == "ollama" and self.effort is not None:
             raise ValueError(f"'{self.model}': effort is not supported for Ollama models")
@@ -39,7 +42,7 @@ class Candidate(BaseModel):
     @property
     def api_model(self) -> str:
         """The model name the provider's API expects."""
-        return self.model.removeprefix(OLLAMA_PREFIX)
+        return self.model.removeprefix(OLLAMA_PREFIX).removeprefix(OPENROUTER_PREFIX)
 
     @property
     def label(self) -> str:

@@ -1,0 +1,9 @@
+# Candidates served through OpenRouter (one key for many providers).
+# Set OPENROUTER_API_KEY in .env. Prices are looked up from OpenRouter automatically.
+# max_tokens caps each answer, which also caps the worst-case cost used by --max-spend.
+candidates:
+  - model: openrouter/anthropic/claude-haiku-4.5
+    max_tokens: 1500
+  - model: openrouter/anthropic/claude-sonnet-5.5
+    effort: low
+    max_tokens: 2000
