@@ -248,6 +248,14 @@ def test_rerun_command(tmp_path, monkeypatch):
     [saved] = [json.loads(line) for line in out.read_text("utf-8").splitlines()]
     assert (saved["status"], saved["outcome"], saved["calls_matched"]) == ("finished", "pass", 2)
 
+    as_json = CliRunner().invoke(
+        app,
+        ["rerun", str(logs), "-c", str(candidates), "--config", str(rules), "--out", str(out),
+         "--cache", str(tmp_path / "cache.sqlite"), "--yes", "--json"],
+    )  # fmt: skip
+    data = json.loads(as_json.stdout)
+    assert data["runs"][0]["status"] == "finished" and data["tools"] == "the log"
+
     no_sessions = tmp_path / "plain.jsonl"
     no_sessions.write_text(
         SESSION[2].model_copy(update={"session_id": None}).model_dump_json(), "utf-8"

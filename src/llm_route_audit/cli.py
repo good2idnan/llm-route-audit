@@ -111,6 +111,15 @@ from llm_route_audit.rerun import apply_grades as apply_rerun_grades
 from llm_route_audit.rerun import grading_inputs as rerun_grading_inputs
 from llm_route_audit.runner import Job, execute
 from llm_route_audit.sampling import sample_sessions, stratified_sample
+from llm_route_audit.status import (
+    append_history,
+    build_tracks,
+    load_history,
+    monitor_snapshot,
+    outcomes_snapshot,
+    render_status_html,
+    render_status_text,
+)
 
 app = typer.Typer(
     help="Find out whether LLM model routing saves money without hurting quality, "
@@ -234,8 +243,8 @@ def _confirm_spend(total: float | None, budget: float | None, yes: bool) -> None
             if total is not None
             else "Some models have no price, so the cost is unknown. Continue?"
         )
-        if not typer.confirm(question, default=False):
-            typer.echo("Cancelled. Nothing was sent.")
+        if not typer.confirm(question, default=False, err=True):
+            typer.echo("Cancelled. Nothing was sent.", err=True)
             raise typer.Exit(code=1)
 
 
@@ -246,6 +255,28 @@ def _progress(noun: str) -> Callable[[int, int], None]:
             typer.echo(f"  {done}/{total} {noun}", err=True)
 
     return report
+
+
+def _say(to_stderr: bool) -> Callable[..., None]:
+    """Echo for human-readable lines: stderr when the command prints JSON on stdout."""
+
+    def say(text: str = "") -> None:
+        typer.echo(text, err=to_stderr)
+
+    return say
+
+
+HistoryOpt = Annotated[
+    Path,
+    typer.Option(help="Route history file; `llm-route-audit status` charts it."),
+]
+NoHistoryOpt = Annotated[
+    bool, typer.Option("--no-history", help="Don't add this run to the route history.")
+]
+JsonOpt = Annotated[
+    bool,
+    typer.Option("--json", help="Print the results as JSON; other messages go to stderr."),
+]
 
 
 BatchOpt = Annotated[
@@ -842,11 +873,15 @@ def monitor(
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
     ] = False,
+    history: HistoryOpt = WORK_DIR / "history.jsonl",
+    no_history: NoHistoryOpt = False,
+    as_json: JsonOpt = False,
 ) -> None:
     """Check that routed traffic still meets the quality the audit measured.
 
     Exits with code 2 when a task's quality has dropped, so it can run from cron or CI.
     """
+    say = _say(as_json)
     records = _load_records(path)
     try:
         policy = load_policy(policy_path)
@@ -865,11 +900,16 @@ def monitor(
         raise typer.Exit(code=1) from None
 
     if not plan.checks:
-        typer.echo("Nothing to check:")
-        for task, why in plan.not_checked.items():
-            typer.echo(f"{INDENT}- {task}: {why}")
-        if not any(r.switched for r in policy.routes.values()):
+        if as_json:
             typer.echo(
+                json.dumps({"kind": "monitor", "routes": [], "not_checked": plan.not_checked})
+            )
+            return
+        say("Nothing to check:")
+        for task, why in plan.not_checked.items():
+            say(f"{INDENT}- {task}: {why}")
+        if not any(r.switched for r in policy.routes.values()):
+            say(
                 "The policy has no switched routes with an audited pass rate. Re-export it "
                 "with this version of llm-route-audit."
             )
@@ -880,21 +920,21 @@ def monitor(
     try:
         shadow_cost, judge_cost = plan.estimate_cost(price_table, rules, judge)
         tasks = sorted({c.task for c in plan.checks})
-        typer.echo(
+        say(
             f"Monitor plan: {len(plan.checks)} production answers from {len(tasks)} routed "
             f"tasks ({', '.join(tasks)})"
         )
-        typer.echo(
+        say(
             f"{INDENT}Shadow answers from the reference model: est. "
             f"{usd(shadow_cost) if shadow_cost is not None else 'unknown'}"
         )
-        typer.echo(
+        say(
             f"{INDENT}Judge ({judge.label}): up to "
             f"{usd(judge_cost) if judge_cost is not None else 'unknown'}"
         )
-        typer.echo("")
+        say("")
         if dry_run:
-            typer.echo("Dry run: nothing was sent.")
+            say("Dry run: nothing was sent.")
             return
         total = None if shadow_cost is None or judge_cost is None else shadow_cost + judge_cost
         _confirm_spend(total, budget, yes)
@@ -930,16 +970,30 @@ def monitor(
 
     write_grades(out, run.grades)
     health = assess(run.grades, plan, tolerance=tolerance, min_checks=min_checks)
-    typer.echo(
-        render_monitor(
-            health,
-            plan,
-            source=path.as_posix(),
+    snapshot = monitor_snapshot(health, tolerance, path.as_posix(), policy_path.as_posix())
+    if not no_history:
+        append_history(history, snapshot)
+    if as_json:
+        snapshot.update(
             spent=shadow_spent + run.judge_spent,
             shadow_failed=failed,
-            out_path=out.as_posix(),
+            not_checked=plan.not_checked,
+            grades_file=out.as_posix(),
         )
-    )
+        typer.echo(json.dumps(snapshot))
+    else:
+        say(
+            render_monitor(
+                health,
+                plan,
+                source=path.as_posix(),
+                spent=shadow_spent + run.judge_spent,
+                shadow_failed=failed,
+                out_path=out.as_posix(),
+            )
+        )
+    if not no_history:
+        say(f"Added to the route history ({history.as_posix()}); see `llm-route-audit status`.")
     if execution.stopped_reason or run.stopped_reason:
         raise typer.Exit(code=1)
     if any(h.status == "ALERT" for h in health):
@@ -1135,11 +1189,15 @@ def outcomes(
         Path | None,
         typer.Option(help="Write an updated policy here, with REVERT routes sent back."),
     ] = None,
+    history: HistoryOpt = WORK_DIR / "history.jsonl",
+    no_history: NoHistoryOpt = False,
+    as_json: JsonOpt = False,
 ) -> None:
     """Learn from real-world feedback: are routed tasks getting as many good outcomes as before?
 
     Exits with code 2 when a route should be reverted, so it can run from cron or CI.
     """
+    say = _say(as_json)
     records = _load_records(path)
     try:
         policy = load_policy(policy_path)
@@ -1156,11 +1214,25 @@ def outcomes(
         min_outcomes=min_outcomes,
         tolerance=tolerance,
     )
-    typer.echo(feedback.render_outcomes(report, path.as_posix()))
+    snapshot = outcomes_snapshot(report, path.as_posix(), policy_path.as_posix())
+    if not no_history:
+        append_history(history, snapshot)
+    if as_json:
+        snapshot.update(
+            with_outcome=report.with_outcome,
+            unrecognised=dict(report.unrecognised),
+            unmatched_ids=report.unmatched_ids,
+            not_switched=report.not_switched,
+        )
+        typer.echo(json.dumps(snapshot))
+    else:
+        say(feedback.render_outcomes(report, path.as_posix()))
+    if not no_history:
+        say(f"Added to the route history ({history.as_posix()}); see `llm-route-audit status`.")
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(feedback.updated_policy_yaml(policy, report), encoding="utf-8")
-        typer.echo(f"Updated policy saved to {out.as_posix()}")
+        say(f"Updated policy saved to {out.as_posix()}")
     if report.reverts:
         raise typer.Exit(code=2)
 
@@ -1227,8 +1299,10 @@ def rerun(
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the confirmation before spending.")
     ] = False,
+    as_json: JsonOpt = False,
 ) -> None:
     """Re-run whole agent sessions on cheaper models and see if they still finish the job."""
+    say = _say(as_json)
     records = _load_records(path)
     picked = sample_sessions(records, sessions_wanted, seed=seed)
     if not picked:
@@ -1250,9 +1324,9 @@ def rerun(
     finals = [steps[-1] for _, steps in picked]
     judge_cost = judge_upper_bound(price_table, judge, rules, finals)
     total: float | None = 0.0
-    typer.echo(f"Re-run plan: {len(picked)} sessions x {len(candidates)} candidates")
+    say(f"Re-run plan: {len(picked)} sessions x {len(candidates)} candidates")
     counts = Counter(task for task, _ in picked)
-    typer.echo("Sessions: " + ", ".join(f"{t} {n}" for t, n in sorted(counts.items())))
+    say("Sessions: " + ", ".join(f"{t} {n}" for t, n in sorted(counts.items())))
     rows = []
     for c in candidates:
         values = estimates[c.label]
@@ -1267,10 +1341,10 @@ def rerun(
             usd(judge_total) if judge_total is not None else "unknown",
         ]
     )
-    typer.echo("")
+    say("")
     for line in table(["Model", "Est. cost"], rows):
-        typer.echo(line)
-    typer.echo(
+        say(line)
+    say(
         f"{INDENT}Estimates assume each session takes as many turns as the original. "
         "Use --max-spend for a hard limit."
     )
@@ -1279,14 +1353,14 @@ def rerun(
         tools_note += " first, then " + (
             "your function " + tool_handler if tool_handler else f"MCP server {mcp}"
         )
-        typer.echo("")
-        typer.echo(
+        say("")
+        say(
             "Warning: tool calls the log has no result for will run for real through your tools. "
             "Use test accounts or a sandbox."
         )
-    typer.echo("")
+    say("")
     if dry_run:
-        typer.echo("Dry run: nothing was sent.")
+        say("Dry run: nothing was sent.")
         return
     _confirm_spend(total, budget, yes)
     if (tool_handler or mcp) and not yes:
@@ -1341,9 +1415,39 @@ def rerun(
                 source.close()
 
     write_runs(out, runs)
-    typer.echo("")
-    typer.echo(render_reruns(runs, path.as_posix(), tools_note, spend.spent))
-    typer.echo(f"\nResults saved to {out.as_posix()}")
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {"spent": spend.spent, "tools": tools_note, "runs": [r.to_dict() for r in runs]}
+            )
+        )
+    else:
+        say("")
+        say(render_reruns(runs, path.as_posix(), tools_note, spend.spent))
+    say(f"\nResults saved to {out.as_posix()}")
+
+
+@app.command()
+def status(
+    history: HistoryOpt = WORK_DIR / "history.jsonl",
+    html_path: Annotated[
+        Path, typer.Option("--html", help="Where to save the status page.")
+    ] = WORK_DIR / "status.html",
+    as_json: JsonOpt = False,
+) -> None:
+    """Route health over time, from every `monitor` and `outcomes` run, with a status page.
+
+    Exits with code 2 when a route's latest check is ALERT or REVERT.
+    """
+    tracks = build_tracks(load_history(history))
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.write_text(render_status_html(tracks, history.as_posix()), encoding="utf-8")
+    if as_json:
+        typer.echo(json.dumps({"routes": [t.to_dict() for t in tracks]}))
+    else:
+        typer.echo(render_status_text(tracks, history.as_posix(), html_path.as_posix()))
+    if any(t.needs_attention for t in tracks):
+        raise typer.Exit(code=2)
 
 
 class LabelMethod(StrEnum):

@@ -174,6 +174,23 @@ def test_monitor_command_exits_2_on_alert(tmp_path, monkeypatch):
     assert result.exit_code == 2, result.output
     assert "ALERT: quality dropped on classify" in result.output
     assert Path(tmp_path / "monitor.jsonl").exists()
+    assert "Added to the route history" in result.output
+
+    as_json = CliRunner().invoke(app, [*args, "--json"])
+    data = json.loads(as_json.stdout)  # JSON alone on stdout; messages go to stderr
+    [route] = data["routes"]
+    assert (route["task"], route["status"], route["count"]) == ("classify", "ALERT", 20)
+    assert route["rate"] == pytest.approx(0.6) and data["spent"] >= 0
+    history = Path(".llm-route-audit/history.jsonl").read_text("utf-8").splitlines()
+    assert len(history) == 2
+
+    CliRunner().invoke(app, [*args, "--no-history"])
+    assert len(Path(".llm-route-audit/history.jsonl").read_text("utf-8").splitlines()) == 2
+
+    status = CliRunner().invoke(app, ["status"])
+    assert status.exit_code == 2  # the latest check is an ALERT
+    assert "Needs attention: classify" in status.output
+    assert Path(".llm-route-audit/status.html").exists()
 
 
 def test_old_policy_without_audited_rates_explains_itself(tmp_path):

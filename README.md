@@ -76,6 +76,7 @@ your logs ─▶ analyze ─▶ replay a sample ─▶ grade answers ─▶ repo
 | `llm-route-audit monitor` | After you switch, check that routed traffic still meets the audited quality |
 | `llm-route-audit check-model` | Test a newly released model on your last audit's sample and see what it would change |
 | `llm-route-audit outcomes` | Learn from real-world feedback: send a route back if its good-outcome rate drops |
+| `llm-route-audit status` | Route health over time from every `monitor` and `outcomes` run, with an offline status page |
 | `llm-route-audit rerun` | Re-run whole agent sessions on cheaper models and see if they still finish the job |
 
 ## Audit your own traffic
@@ -193,6 +194,18 @@ For each task that switched to a cheaper model, it compares the share of good ou
 | `WAIT` | Too few outcomes on one of the models to judge (`--min-outcomes 30`) |
 | `WATCH` | Fewer good outcomes, but it could still be chance |
 | `REVERT` | 95% sure the routed model does worse. `--out` writes a policy with the route sent back, and the command exits with code 2. |
+
+**9. See route health over time**
+
+Every `monitor` and `outcomes` run is saved to `.llm-route-audit/history.jsonl` (`--history` picks another file, `--no-history` skips it). `status` turns that history into a table and a status page:
+
+```bash
+uv run llm-route-audit status
+```
+
+The page (`.llm-route-audit/status.html`) opens offline and has one chart per route: the pass rate or good-outcome rate at each check, its 95% range, and the audited floor or the replaced model's rate, with the status of every run. Routes that need attention come first, and the command exits with code 2 when a route's latest check is `ALERT` or `REVERT`, so a scheduled job can flag it.
+
+**Use your own dashboard.** `monitor`, `outcomes`, `rerun`, `status` (and `analyze` and `report`) take `--json` and print their results as JSON, with other messages on stderr, so you can send the numbers to Grafana, Datadog or anything else you already use. llm-route-audit itself never sends data anywhere.
 
 ## Agents
 

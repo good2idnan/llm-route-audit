@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 (2026-10-08)
+
+- **Route history.** Every `monitor` and `outcomes` run is saved to `.llm-route-audit/history.jsonl` (`--history`, `--no-history`).
+- **`status`**: route health over time, as a table and an offline status page (`.llm-route-audit/status.html`) with one chart per route: rate, 95% range, target and the status of every run. It exits with code 2 when a route's latest check is ALERT or REVERT.
+- **`--json`** on `monitor`, `outcomes`, `rerun` and `status`, for your own dashboards. Other messages, including the spending question, go to stderr.
+
 ## 0.3.0 (2026-10-07)
 
 - **Router audits.** Candidates with `router: true` (OpenRouter's Auto Router, TypeSafe's Jev Router, a LiteLLM auto-router) are replayed like any model. Every answer records the model the router picked, and the report adds a router audit: its picks per task, how they graded, and whether a simpler strategy is as good for less. `price_as` prices estimates and `--max-spend` for routers, which have no fixed price. Every provider now records the model that actually answered.
