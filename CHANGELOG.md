@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 (2026-10-12)
+
+- New tagline: "Prove it before you route." A short README for newcomers, with the full reference moved to [docs/guide.md](docs/guide.md).
+
 ## 0.3.1 (2026-10-08)
 
 - **Route history.** Every `monitor` and `outcomes` run is saved to `.llm-route-audit/history.jsonl` (`--history`, `--no-history`).

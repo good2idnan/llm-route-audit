@@ -122,8 +122,8 @@ from llm_route_audit.status import (
 )
 
 app = typer.Typer(
-    help="Find out whether LLM model routing saves money without hurting quality, "
-    "on your own traffic.",
+    help="Prove it before you route: test cheaper LLMs on your own traffic and switch only "
+    "where quality holds.",
     no_args_is_help=True,
     add_completion=False,
 )
