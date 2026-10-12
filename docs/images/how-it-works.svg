@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 864 336" width="864" height="336" role="img" aria-label="How llm-route-audit works: your logs are tested on cheaper models, graded against the original answers, and reported task by task. Example: switch ticket sorting to Haiku, 75% cheaper; switch reply drafting to Sonnet at low effort, 55% cheaper; keep Opus for contract review.">
+<style>
+.bg{fill:#ffffff;stroke:#d5dde5}
+.step{fill:#f5f7f9;stroke:#d5dde5}
+.step.hi{fill:#e2edf7;stroke:#1d5c96}
+.card{fill:#f9fbfc;stroke:#d5dde5}
+.rule{stroke:#e6ebf0}
+.arrow{stroke:#8a96a3;stroke-width:1.5;fill:none}
+.t{font:600 15px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#15202b}
+.s{font:12.5px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#56636f}
+.h{font:600 12px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#56636f;letter-spacing:.04em}
+.r{font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#15202b}
+.m{font:13px ui-monospace,SFMono-Regular,Consolas,monospace;fill:#15202b}
+.chip-go{fill:#e1f2e8}.chip-keep{fill:#eaeef2}
+.go{font:600 12px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#2c7a4b}
+.keep{font:600 12px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#56636f}
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M2 1L8 5L2 9" fill="none" stroke="#8a96a3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect class="bg" x="0.5" y="0.5" width="863" height="335" rx="12"/>
+<rect class="step" x="24" y="24" width="180" height="72" rx="10"/>
+<text class="t" x="114" y="54" text-anchor="middle">Your logs</text>
+<text class="s" x="114" y="76" text-anchor="middle">real requests and answers</text>
+<rect class="step" x="236" y="24" width="180" height="72" rx="10"/>
+<text class="t" x="326" y="54" text-anchor="middle">Test</text>
+<text class="s" x="326" y="76" text-anchor="middle">replay on cheaper models</text>
+<rect class="step" x="448" y="24" width="180" height="72" rx="10"/>
+<text class="t" x="538" y="54" text-anchor="middle">Grade</text>
+<text class="s" x="538" y="76" text-anchor="middle">against the original answers</text>
+<rect class="step hi" x="660" y="24" width="180" height="72" rx="10"/>
+<text class="t" x="750" y="54" text-anchor="middle">Report</text>
+<text class="s" x="750" y="76" text-anchor="middle">where switching is safe</text>
+<line class="arrow" x1="206" y1="60" x2="232" y2="60" marker-end="url(#a)"/>
+<line class="arrow" x1="418" y1="60" x2="444" y2="60" marker-end="url(#a)"/>
+<line class="arrow" x1="630" y1="60" x2="656" y2="60" marker-end="url(#a)"/>
+<rect class="card" x="24" y="120" width="816" height="192" rx="10"/>
+<text class="h" x="44" y="150">EXAMPLE REPORT</text>
+<text class="s" x="44" y="176">Task</text>
+<text class="s" x="244" y="176">Model to use</text>
+<text class="s" x="520" y="176">Decision</text>
+<line class="rule" x1="44" x2="820" y1="186" y2="186"/>
+<text class="r" x="44" y="214">Sorting tickets</text>
+<text class="m" x="244" y="214">claude-haiku-4-5</text>
+<rect class="chip-go" x="520" y="198" width="62" height="22" rx="11"/>
+<text class="go" x="551" y="213" text-anchor="middle">Switch</text>
+<text class="s" x="594" y="214">75% cheaper, passed 49 of 50</text>
+<line class="rule" x1="44" x2="820" y1="228" y2="228"/>
+<text class="r" x="44" y="256">Drafting replies</text>
+<text class="m" x="244" y="256">claude-sonnet-5-5 · low</text>
+<rect class="chip-go" x="520" y="240" width="62" height="22" rx="11"/>
+<text class="go" x="551" y="255" text-anchor="middle">Switch</text>
+<text class="s" x="594" y="256">55% cheaper, passed 48 of 50</text>
+<line class="rule" x1="44" x2="820" y1="270" y2="270"/>
+<text class="r" x="44" y="298">Reviewing contracts</text>
+<text class="m" x="244" y="298">claude-opus-5-5</text>
+<rect class="chip-keep" x="520" y="282" width="62" height="22" rx="11"/>
+<text class="keep" x="551" y="297" text-anchor="middle">Keep</text>
+<text class="s" x="594" y="298">no cheaper model kept up</text>
+</svg>
